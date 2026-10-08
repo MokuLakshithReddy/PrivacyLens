@@ -1,6 +1,6 @@
 /**
  * PrivacyLens — Background Service Worker Entrypoint
- * Coordinates passive network observation, permission tracking, and tab state management.
+ * Coordinates passive network observation, permission tracking, live toolbar badges, and tab state management.
  */
 
 import { parseRequestSignal } from './network/traffic-observer';
@@ -10,10 +10,42 @@ import { TabObservationStore } from './messaging/message-router';
 const store = new TabObservationStore();
 const permissions = new PermissionObserver();
 
+/**
+ * Updates the extension badge on the browser toolbar with the calculated risk score
+ */
+function updateTabBadge(tabId: number, score: number) {
+  try {
+    const text = score.toString();
+    chrome.action.setBadgeText({ tabId, text });
+
+    // Dynamic color coding: Green (<=25), Amber (26-60), Red (>60)
+    let color = '#10b981'; // Green
+    if (score > 60) {
+      color = '#ef4444'; // Red
+    } else if (score > 25) {
+      color = '#f59e0b'; // Amber
+    }
+
+    chrome.action.setBadgeBackgroundColor({ tabId, color });
+  } catch {
+    // Tab may have closed
+  }
+}
+
 // Tab navigation lifecycle
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading' && tab.url) {
     store.initTab(tabId, tab.url);
+    // Reset badge while loading
+    chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
+  }
+});
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const session = store.getSession(activeInfo.tabId);
+  if (session) {
+    const analysis = store.evaluateLocally(session);
+    updateTabBadge(activeInfo.tabId, analysis.riskScore);
   }
 });
 
@@ -28,12 +60,17 @@ chrome.webRequest.onBeforeRequest.addListener(
     if (details.tabId >= 0) {
       const signal = parseRequestSignal(details);
       if (signal) {
-        // Auto-initialize session if tab was opened before extension worker woke up
         let session = store.getSession(details.tabId);
         if (!session && details.initiator) {
           session = store.initTab(details.tabId, details.initiator);
         }
         store.addRequest(details.tabId, signal);
+
+        // Update live badge periodically as network requests accumulate
+        if (session && session.requests.length % 3 === 0) {
+          const quickAnalysis = store.evaluateLocally(session);
+          updateTabBadge(details.tabId, quickAnalysis.riskScore);
+        }
       }
     }
   },
@@ -108,6 +145,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           analysis = store.evaluateLocally(session);
         }
 
+        // Update live badge with verified score
+        updateTabBadge(targetTabId, analysis.riskScore);
+
         sendResponse({ analysis });
       } catch (err: any) {
         sendResponse({ error: err.message });
@@ -118,4 +158,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-console.log('[PrivacyLens] Background Service Worker active.');
+console.log('[PrivacyLens] Background Service Worker active with live badge support.');

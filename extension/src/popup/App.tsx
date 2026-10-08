@@ -5,7 +5,7 @@ import { GapList } from './components/GapList';
 import { PolicyObservedMatrix } from './components/PolicyObservedMatrix';
 import { DataFlowGraph } from './components/DataFlowGraph';
 import { EvidenceModal } from './components/EvidenceModal';
-import { Shield, RefreshCw, Radio, Layers, History, Activity, Globe, Compass } from 'lucide-react';
+import { Shield, RefreshCw, Radio, Layers, History, Activity, Globe, Compass, Download } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
@@ -68,6 +68,64 @@ export const App: React.FC = () => {
     setLoading(false);
   };
 
+  const exportAuditReport = () => {
+    if (!analysis) return;
+    const dateStr = new Date(analysis.inspectedAt).toLocaleString();
+    const md = `# 🛡️ PrivacyLens Audit Report — ${analysis.domain}
+
+**Inspection Date:** ${dateStr}  
+**Overall Risk Score:** ${analysis.riskScore} / 100 (${analysis.riskTier})  
+**Evidentiary Confidence:** ${(analysis.confidence * 100).toFixed(0)}%  
+**Discovered Policy URL:** ${analysis.policyUrl || 'None Identified'}  
+
+---
+
+## 1. Executive Summary
+${analysis.summary}
+
+## 2. Policy vs Reality Gaps Detected (${analysis.findings.length})
+${analysis.findings
+  .map(
+    (f, i) => `### ${i + 1}. [${f.severity.toUpperCase()}] ${f.title}
+- **Confidence:** ${(f.confidence * 100).toFixed(0)}%
+- **Rationale:** ${f.rationale}
+- **Policy Citations:** ${
+      f.evidence.policyQuotes.length > 0
+        ? f.evidence.policyQuotes.map((q) => `\n  > "${q}"`).join('')
+        : 'No disclosure found in published policy.'
+    }
+- **Observed Domains:** ${f.evidence.observedDomains.join(', ')}
+`
+  )
+  .join('\n')}
+
+## 3. Observed Third-Party Supply Chain (${analysis.dataFlow.thirdParties.length})
+| Destination Domain | Category | Observed Requests | Disclosed in Policy |
+| :--- | :--- | :---: | :---: |
+${analysis.dataFlow.thirdParties
+  .map(
+    (tp) =>
+      `| \`${tp.domain}\` | ${tp.category} | ${tp.requestCount} | ${
+        tp.disclosedInPolicy ? 'Yes' : 'No'
+      } |`
+  )
+  .join('\n')}
+
+---
+*Report generated automatically by PrivacyLens Browser Security Extension.*
+`;
+
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${analysis.domain.replace(/[^a-z0-9]/gi, '_')}_privacy_audit.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     runAnalysis();
   }, []);
@@ -115,7 +173,6 @@ export const App: React.FC = () => {
           </p>
         </div>
       ) : isSystemPage ? (
-        /* Explanatory banner when user is on edge://newtab or chrome://newtab */
         <div className="flex-1 flex flex-col justify-center glass-panel rounded-2xl p-5 space-y-4 my-auto border border-blue-500/20">
           <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center mx-auto text-blue-400 shadow-lg shadow-blue-500/10">
             <Compass className="w-6 h-6 text-sky-400" />
@@ -300,6 +357,17 @@ export const App: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Export Report Action */}
+          <div className="pt-2 border-t border-slate-800/80">
+            <button
+              onClick={exportAuditReport}
+              className="w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-850 hover:border-sky-500/40 border border-slate-800 text-sky-400 hover:text-sky-300 font-mono text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-sm group"
+            >
+              <Download className="w-3.5 h-3.5 text-sky-400 group-hover:translate-y-0.5 transition-transform" />
+              Export Evidence Audit Report (.md)
+            </button>
+          </div>
         </div>
       ) : null}
 
