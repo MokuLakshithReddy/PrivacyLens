@@ -5,7 +5,7 @@ import { GapList } from './components/GapList';
 import { PolicyObservedMatrix } from './components/PolicyObservedMatrix';
 import { DataFlowGraph } from './components/DataFlowGraph';
 import { EvidenceModal } from './components/EvidenceModal';
-import { Shield, RefreshCw, Radio, Layers, History, Activity } from 'lucide-react';
+import { Shield, RefreshCw, Radio, Layers, History, Activity, Globe, Compass } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
@@ -14,15 +14,34 @@ export const App: React.FC = () => {
   const [selectedFinding, setSelectedFinding] = useState<EvidenceFinding | null>(null);
   const [currentDomain, setCurrentDomain] = useState<string>('example.com');
   const [evalMode, setEvalMode] = useState<'backend' | 'edge'>('edge');
+  const [isSystemPage, setIsSystemPage] = useState<boolean>(false);
+  const [systemPageUrl, setSystemPageUrl] = useState<string>('');
 
   const runAnalysis = async () => {
     setLoading(true);
+    setIsSystemPage(false);
 
     try {
       if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab && tab.id && tab.url) {
-          const parsed = new URL(tab.url);
+        if (tab && tab.id) {
+          const tabUrl = tab.url || '';
+
+          // Check if user is on an internal browser page (edge://, chrome://, about:)
+          const isInternal = !tabUrl || 
+            tabUrl.startsWith('edge://') || 
+            tabUrl.startsWith('chrome://') || 
+            tabUrl.startsWith('chrome-extension://') || 
+            tabUrl.startsWith('about:');
+
+          if (isInternal) {
+            setIsSystemPage(true);
+            setSystemPageUrl(tabUrl || 'New Tab Page');
+            setLoading(false);
+            return;
+          }
+
+          const parsed = new URL(tabUrl);
           setCurrentDomain(parsed.hostname);
 
           chrome.runtime.sendMessage(
@@ -64,13 +83,15 @@ export const App: React.FC = () => {
           <div>
             <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5 font-mono">
               PrivacyLens
-              <span className={`text-[10px] font-normal px-1.5 py-0.2 rounded border ${
-                evalMode === 'backend'
-                  ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                  : 'text-sky-400 bg-sky-500/10 border-sky-500/20'
-              }`}>
-                {evalMode === 'backend' ? 'Backend Live' : 'Edge Mode'}
-              </span>
+              {!isSystemPage && (
+                <span className={`text-[10px] font-normal px-1.5 py-0.2 rounded border ${
+                  evalMode === 'backend'
+                    ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                    : 'text-sky-400 bg-sky-500/10 border-sky-500/20'
+                }`}>
+                  {evalMode === 'backend' ? 'Backend Live' : 'Edge Mode'}
+                </span>
+              )}
             </h1>
           </div>
         </div>
@@ -92,6 +113,37 @@ export const App: React.FC = () => {
           <p className="text-xs font-mono text-slate-400 tracking-wide text-center">
             Correlating declared policy with runtime telemetry for {currentDomain}...
           </p>
+        </div>
+      ) : isSystemPage ? (
+        /* Explanatory banner when user is on edge://newtab or chrome://newtab */
+        <div className="flex-1 flex flex-col justify-center glass-panel rounded-2xl p-5 space-y-4 my-auto border border-blue-500/20">
+          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center mx-auto text-blue-400 shadow-lg shadow-blue-500/10">
+            <Compass className="w-6 h-6 text-sky-400" />
+          </div>
+
+          <div className="text-center space-y-1.5">
+            <h3 className="text-sm font-bold text-white tracking-tight">
+              Browser System Page Detected
+            </h3>
+            <div className="text-[11px] font-mono text-slate-400 bg-slate-900/80 px-2 py-1 rounded inline-block border border-slate-800">
+              {systemPageUrl}
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed pt-1">
+              Chromium security policy strictly restricts browser extensions from inspecting internal system and start pages.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 text-xs">
+            <div className="font-semibold text-slate-200 flex items-center gap-1.5 text-[11px]">
+              <Globe className="w-3.5 h-3.5 text-sky-400" />
+              How to inspect with PrivacyLens:
+            </div>
+            <ol className="list-decimal list-inside text-slate-400 space-y-1 text-[11px] leading-relaxed">
+              <li>Type any live URL in your address bar (e.g. <span className="text-sky-300 font-mono">msn.com</span>, <span className="text-sky-300 font-mono">wikipedia.org</span>, or <span className="text-sky-300 font-mono">nytimes.com</span>).</li>
+              <li>Wait for the page to finish loading.</li>
+              <li>Click the PrivacyLens extension icon to view its real-time tracking footprint and policy correlation.</li>
+            </ol>
+          </div>
         </div>
       ) : analysis ? (
         <div className="space-y-3">
@@ -262,7 +314,6 @@ export const App: React.FC = () => {
 
 // Generates dynamic analysis specific to the current domain when in standalone mode
 function generateDynamicFallbackAnalysis(domain: string): SiteAnalysisResult {
-  // Deterministic seed based on domain string characters
   let hash = 0;
   for (let i = 0; i < domain.length; i++) {
     hash = (hash << 5) - hash + domain.charCodeAt(i);
