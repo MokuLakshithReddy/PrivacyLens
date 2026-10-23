@@ -183,10 +183,9 @@ export class TabObservationStore {
   }
 
   async syncWithBackend(batch: TabObservationBatch): Promise<SiteAnalysisResult | null> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60_000);
-      try {
       // Ingest observations
       const ingestRes = await fetch(`${BACKEND_BASE_URL}/observations/ingest`, {
         method: 'POST',
@@ -249,15 +248,12 @@ export class TabObservationStore {
       }
 
       return (await correlateRes.json()) as SiteAnalysisResult;
-      } catch (error) {
-        if (error instanceof BackendSyncError) throw error;
-        // Network and timeout failures mean the local evaluator can be used safely.
-        return null;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    } catch {
+    } catch (error) {
+      if (error instanceof BackendSyncError) throw error;
+      // Network and timeout failures mean the local evaluator can be used safely.
       return null;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 }

@@ -43,4 +43,16 @@ test("backend failures are not treated as successful ingestion", async () => {
   assert.match(router, /if \(!ingestRes\.ok\)/);
   assert.match(router, /Observation ingestion failed/);
   assert.match(router, /BackendSyncError/);
+  assert.match(router, /catch \(error\) \{\s+if \(error instanceof BackendSyncError\) throw error/s);
+  assert.doesNotMatch(router, /catch \{\s+return null;\s+\}\s+}\s+catch/);
+});
+
+test("backend HTTP errors surface while transport failures can fall back", async () => {
+  const router = await source("../src/background/messaging/message-router.ts");
+  const background = await source("../src/background/index.ts");
+  assert.match(router, /status\?\: number/);
+  assert.match(router, /signal: controller\.signal/);
+  assert.match(router, /return null/);
+  assert.match(background, /catch \(error\) \{\s+sendResponse\(\{\s+error:/s);
+  assert.match(background, /if \(!analysis\) \{\s+analysis = store\.evaluateLocally\(session\);/s);
 });

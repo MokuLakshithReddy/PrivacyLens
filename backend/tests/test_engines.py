@@ -127,3 +127,35 @@ async def test_disclosure_matching_requires_domain_boundaries():
     )
     assert findings
     assert findings[0].evidence.observedDomains == ["notgoogle.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named_party", ["Google", "google.evil", "Google LLC"])
+async def test_unverified_organization_names_do_not_prove_disclosure(named_party):
+    engine = CorrelationEngine()
+    claim = PolicyClaimSchema(
+        claim_id="clm_unverified",
+        category="sharing",
+        data_type="identifiers",
+        purpose="advertising",
+        sharing=True,
+        third_party=named_party,
+        section_name="Advertising",
+        exact_quote=f"We share identifiers with {named_party} for advertising.",
+    )
+    request = NetworkSignalSchema(
+        requestId="evt_unverified",
+        url="https://ads.example.net/pixel",
+        targetDomain="ads.example.net",
+        isThirdParty=True,
+        category="advertising",
+    )
+    findings = await engine.detect_privacy_gaps(
+        domain="example.com",
+        claims=[claim],
+        requests=[request],
+        scan_session_id="scan_unverified_0001",
+        policy_version_id="policy_unverified_0001",
+    )
+    assert findings
+    assert findings[0].evidence.observedDomains == ["ads.example.net"]
