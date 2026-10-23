@@ -1,8 +1,31 @@
 import uuid
+import re
 from typing import List
 from app.schemas.policy import PolicyClaimSchema
 from app.schemas.observation import NetworkSignalSchema
 from app.schemas.correlation import EvidenceFindingSchema, FindingEvidenceSchema
+
+
+def _canonical_domain(value: str) -> str | None:
+    candidate = value.strip().lower().rstrip(".")
+    if "://" in candidate:
+        candidate = candidate.split("://", 1)[1].split("/", 1)[0]
+    candidate = candidate.split(":", 1)[0].removeprefix("www.")
+    if "." not in candidate or not re.fullmatch(r"[a-z0-9.-]+", candidate):
+        return None
+    return candidate
+
+
+def _domain_matches(named_party: str, observed_domain: str) -> bool:
+    named_domain = _canonical_domain(named_party)
+    observed = _canonical_domain(observed_domain)
+    if named_domain and observed:
+        return observed == named_domain or observed.endswith(f".{named_domain}")
+
+    organization = re.sub(r"[^a-z0-9]", "", named_party.lower())
+    observed_parts = (observed or observed_domain.lower()).split(".")
+    observed_organization = re.sub(r"[^a-z0-9]", "", observed_parts[-2] if len(observed_parts) > 1 else observed_parts[0])
+    return bool(organization) and organization == observed_organization
 
 
 class CorrelationEngine:
@@ -38,8 +61,7 @@ class CorrelationEngine:
             domain for domain in ad_domains
             if any(
                 claim.third_party and (
-                    claim.third_party.lower() in domain.lower()
-                    or domain.lower() in claim.third_party.lower()
+                    _domain_matches(claim.third_party, domain)
                 )
                 for claim in relevant_claims
             )

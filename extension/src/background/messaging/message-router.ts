@@ -17,6 +17,15 @@ import {
 
 const BACKEND_BASE_URL = 'http://127.0.0.1:8000/api/v1';
 
+export class BackendSyncError extends Error {
+  readonly kind = 'backend_error';
+
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = 'BackendSyncError';
+  }
+}
+
 export class TabObservationStore {
   private tabSessions = new Map<number, TabObservationBatch>();
 
@@ -179,7 +188,7 @@ export class TabObservationStore {
       const timeoutId = setTimeout(() => controller.abort(), 60_000);
       try {
       // Ingest observations
-      await fetch(`${BACKEND_BASE_URL}/observations/ingest`, {
+      const ingestRes = await fetch(`${BACKEND_BASE_URL}/observations/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -189,6 +198,9 @@ export class TabObservationStore {
         }),
         signal: controller.signal
       });
+      if (!ingestRes.ok) {
+        throw new BackendSyncError(`Observation ingestion failed (${ingestRes.status})`, ingestRes.status);
+      }
 
       const consent = await chrome.storage.local.get({ policyFetchConsent: false });
       const policyFetchAllowed = consent.policyFetchConsent === true;
@@ -217,7 +229,7 @@ export class TabObservationStore {
           }),
           signal: controller.signal
         });
-        if (!analysisRes.ok) throw new Error(`Policy analysis returned ${analysisRes.status}`);
+        if (!analysisRes.ok) throw new BackendSyncError(`Policy analysis returned ${analysisRes.status}`, analysisRes.status);
       }
 
       // Correlate this policy version with this scan session.
@@ -233,12 +245,13 @@ export class TabObservationStore {
       });
 
       if (!correlateRes.ok) {
-        throw new Error(`Correlation returned ${correlateRes.status}`);
+        throw new BackendSyncError(`Correlation returned ${correlateRes.status}`, correlateRes.status);
       }
 
       return (await correlateRes.json()) as SiteAnalysisResult;
-      } catch {
-        // Backend is unavailable or timed out; fall back to local evaluation.
+      } catch (error) {
+        if (error instanceof BackendSyncError) throw error;
+        // Network and timeout failures mean the local evaluator can be used safely.
         return null;
       } finally {
         clearTimeout(timeoutId);

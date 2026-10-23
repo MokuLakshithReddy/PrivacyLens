@@ -36,3 +36,11 @@ test("request deduplication is event-id based", async () => {
   assert.match(router, /r\.requestId === signal\.requestId/);
   assert.doesNotMatch(router, /r\.targetDomain === signal\.targetDomain && r\.category === signal\.category/);
 });
+
+test("backend failures are not treated as successful ingestion", async () => {
+  const router = await source("../src/background/messaging/message-router.ts");
+  assert.match(router, /const ingestRes = await fetch/);
+  assert.match(router, /if \(!ingestRes\.ok\)/);
+  assert.match(router, /Observation ingestion failed/);
+  assert.match(router, /BackendSyncError/);
+});

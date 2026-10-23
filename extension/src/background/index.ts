@@ -180,7 +180,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         // Try syncing with FastAPI backend; if offline, run dynamic local edge evaluation
-        let analysis = await store.syncWithBackend(session);
+        let analysis;
+        try {
+          analysis = await store.syncWithBackend(session);
+        } catch (error) {
+          sendResponse({
+            error: error instanceof Error ? error.message : 'Backend returned an error while analyzing this scan.'
+          });
+          return;
+        }
         if (!analysis) {
           analysis = store.evaluateLocally(session);
         }

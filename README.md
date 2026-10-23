@@ -9,11 +9,13 @@ See [Production Readiness Status](docs/production-readiness-status.md) for the r
 - Manifest V3 extension observes request destination origins, initiator hostnames, methods, categories, and timestamps while monitoring is enabled.
 - Extension counts localStorage and sessionStorage entries without enumerating keys or reading values. It does not inspect cookies. Counts are not sent to the backend.
 - Local FastAPI service ingests bounded, scan-scoped network metadata and stores it in SQLite.
-- Policy API can fetch public policy pages through an SSRF-aware bounded fetcher, parse text, and extract tentative claims using local rules by default. Gemini use requires explicit server configuration and sends policy text to Google.
+- Policy fetching is a separate popup consent choice. When enabled, the policy API can discover and fetch public policy pages through an SSRF-aware bounded fetcher, parse text, and extract tentative claims using local rules by default. Gemini use requires explicit server configuration and sends policy text to Google.
+- Scan sessions are bound to the policy version selected for that scan. Findings include relevant policy excerpts and source offsets where available.
+- Stored site data can be deleted from the popup or `DELETE /api/v1/sites/{domain}`. Retention cleanup runs at API startup using `PRIVACYLENS_RETENTION_DAYS` (90 days by default); it is not a continuous scheduler.
 - Correlation is limited and conservative. Risk weights are visible, but have not been validated against a labelled corpus. Evidence coverage is an input-presence estimate, not confidence.
-- The API only supports local loopback use. Hosted mode is disabled until authentication, authorization, quotas, and retention controls exist.
+- The API only supports local loopback use. Hosted mode is disabled until authentication, authorization, and quotas exist.
 
-Not currently implemented in the active analysis flow: permission-query correlation, storage and cookie persistence analysis, automatic policy discovery/analysis from the extension, calibrated scoring, comprehensive temporal comparisons, and user-facing deletion/retention controls.
+Not currently implemented in the active analysis flow: permission-query correlation, storage and cookie persistence analysis, calibrated scoring, comprehensive temporal comparisons, continuous background retention scheduling, and a full browser end-to-end test suite.
 
 ## Architecture
 
@@ -42,6 +44,8 @@ npm run build
 ```
 
 Load the resulting extension bundle in Chromium's developer extension page. Review its requested site access and keep monitoring disabled until you choose to enable it.
+
+Monitoring and policy fetching are independent controls. Enabling monitoring does not authorize policy discovery, policy retrieval, local policy storage, or external AI processing. Pausing monitoring does not delete stored data; use the Delete data action for the current site.
 
 The API defaults to local rule-based extraction. To explicitly use Gemini, set `PRIVACYLENS_AI_PROVIDER=gemini` and `GEMINI_API_KEY` in the API environment. This sends analyzed policy text to Google's Gemini service. Do not expose the API beyond loopback; setting `PRIVACYLENS_MODE` to a hosted mode or binding to a non-loopback address causes startup validation to fail.
 

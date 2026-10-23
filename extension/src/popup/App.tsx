@@ -17,6 +17,7 @@ export const App: React.FC = () => {
   const [isSystemPage, setIsSystemPage] = useState<boolean>(false);
   const [monitoringEnabled, setMonitoringEnabled] = useState<boolean>(false);
   const [policyFetchConsent, setPolicyFetchConsent] = useState<boolean>(false);
+  const [backendError, setBackendError] = useState<string | null>(null);
   const [systemPageUrl, setSystemPageUrl] = useState<string>('');
 
   const runAnalysis = async () => {
@@ -60,6 +61,7 @@ export const App: React.FC = () => {
           chrome.runtime.sendMessage(
             { type: 'ANALYZE_ACTIVE_TAB', tabId: tab.id },
             (response) => {
+              setBackendError(response?.error || null);
               if (response && response.analysis) {
                 setAnalysis(response.analysis);
                 setEvalMode(response.analysis.evaluationMode);
@@ -273,6 +275,12 @@ ${analysis.dataFlow.thirdParties
               <li>Click the PrivacyLens extension icon to view its real-time tracking footprint and policy correlation.</li>
             </ol>
           </div>
+        </div>
+      ) : backendError ? (
+        <div className="flex-1 flex flex-col justify-center gap-2 p-6">
+          <p className="text-sm font-semibold text-rose-300">Backend analysis failed</p>
+          <p className="text-xs text-slate-400">{backendError}</p>
+          <p className="text-[11px] text-slate-500">The observed scan was not silently replaced with a partial backend result. You can retry or continue with local monitoring.</p>
         </div>
       ) : analysis ? (
         <div className="space-y-3">

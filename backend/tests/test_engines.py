@@ -96,3 +96,34 @@ async def test_gap_detection_omission_advertising():
     assert findings[0].severity == "high"
     assert "potential" in findings[0].title.lower()
     assert "adservice.google.com" in findings[0].evidence.observedDomains
+
+
+@pytest.mark.asyncio
+async def test_disclosure_matching_requires_domain_boundaries():
+    engine = CorrelationEngine()
+    claim = PolicyClaimSchema(
+        claim_id="clm_google",
+        category="sharing",
+        data_type="identifiers",
+        purpose="advertising",
+        sharing=True,
+        third_party="google.com",
+        section_name="Advertising",
+        exact_quote="We share identifiers with Google for advertising.",
+    )
+    request = NetworkSignalSchema(
+        requestId="evt_google",
+        url="https://notgoogle.com/pixel",
+        targetDomain="notgoogle.com",
+        isThirdParty=True,
+        category="advertising",
+    )
+    findings = await engine.detect_privacy_gaps(
+        domain="example.com",
+        claims=[claim],
+        requests=[request],
+        scan_session_id="scan_boundary_0001",
+        policy_version_id="policy_boundary_0001",
+    )
+    assert findings
+    assert findings[0].evidence.observedDomains == ["notgoogle.com"]
