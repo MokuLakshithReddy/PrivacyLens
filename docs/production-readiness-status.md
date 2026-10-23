@@ -20,24 +20,26 @@ This report compares the repository with the attached Production Readiness Imple
 - Added bounded policy retrieval with public-address DNS checks, redirect revalidation, content-type and response-size limits, timeouts, and sanitized stored policy URLs.
 - Added isolated test databases, Python and extension invariant checks, a pinned backend dependency set, CI build/test jobs, and dependency/secret scans.
 - Added explicit policy-fetch consent, startup-triggered retention cleanup, site deletion controls, maintained Public Suffix List classification, and explicit backend-error versus offline-fallback handling.
+- Added Chromium extension E2E coverage for installation, independent consent toggles, monitoring enablement, and offline fallback; CI installs Chromium and runs it under Xvfb.
+- Added a versioned migration ledger for legacy SQLite schemas and a bounded semaphore for concurrent policy discovery/analysis operations.
 - Rewrote `PRIVACY.md` to reflect current collection, storage, and provider behavior.
 
 ## Verification performed
 
 - Backend Python compilation: passed.
-- Backend test suite: 23 passed.
+- Backend test suite: 28 passed.
 - Extension TypeScript/Vite production build: passed.
 - Extension privacy invariant tests: 7 passed.
 - GitHub Actions run `40003937749` for commit `03eaad3` completed successfully; backend, extension, and security jobs passed.
-- Browser end-to-end tests: not present or run.
+- Browser E2E tests: 2 Chromium tests passed locally; CI installs Chromium and runs the same suite under Xvfb. Browser-store permission prompts and deletion against a live API remain release-review scenarios.
 
 ## Remaining release gates
 
-1. Complete a real browser install and end-to-end review of permission prompts, consent changes, monitoring lifecycle, navigation, backend errors, and deletion controls.
+1. Extend browser E2E coverage to navigation between real origins, live API 400/500 responses, policy discovery, and deletion against a test API; browser permission prompt/store review remains manual.
 2. Validate taxonomy, risk factors, thresholds, and disclosure-gap rules against a labelled evaluation corpus. Current coverage and risk values are estimates and heuristics only.
-3. Replace additive SQLite migrations with a tested versioned migration strategy, including cleanup of legacy confidence columns and explicit handling of pre-existing data.
+3. Add rollback/recovery tooling and backup/restore tests for the versioned SQLite migration ledger. Migrations fail before commit; recovery currently requires restoring the SQLite backup.
 4. Add API authentication, per-user authorization, rate limits, and quotas before any hosted or multi-user deployment. Hosted mode is deliberately blocked.
-5. Add request throttling/concurrency limits, operational logging/monitoring that avoids sensitive content, accessibility review, and a release security review.
+5. Add queue-level overload responses and database-lock contention tests; the policy semaphore currently bounds concurrent discovery/analysis to `PRIVACYLENS_MAX_POLICY_OPERATIONS` (2 by default). Add safe operational monitoring, accessibility review, and a release security review.
 6. Review the broad browser host permissions and store listing/privacy disclosures against current extension-store requirements before distribution.
 
 Until these gates are addressed, describe PrivacyLens as a local research prototype and do not publish its heuristic score as a safety or legal-compliance rating.

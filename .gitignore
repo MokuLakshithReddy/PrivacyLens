@@ -12,6 +12,8 @@ ENV/
 build/
 develop-eggs/
 dist/
+extension/test-results/
+extension/playwright-report/
 downloads/
 eggs/
 .eggs/

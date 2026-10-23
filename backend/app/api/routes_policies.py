@@ -20,6 +20,7 @@ from app.schemas.policy import (
 router = APIRouter(prefix="/policies", tags=["Policies"])
 claim_extractor = ClaimExtractor()
 MAX_POLICY_HTML_CHARS = 1_000_000
+policy_operation_limit = asyncio.Semaphore(settings.max_concurrent_policy_operations)
 
 
 @router.post("/discover", response_model=PolicyDiscoverResponse)
@@ -35,8 +36,9 @@ async def discover_policy(request: PolicyDiscoverRequest):
         f"{base}/.well-known/privacy-policy",
     ]
     try:
-        async with asyncio.timeout(15):
-            return await _discover_candidates(candidates)
+        async with policy_operation_limit:
+            async with asyncio.timeout(15):
+                return await _discover_candidates(candidates)
     except TimeoutError:
         pass
 
@@ -71,21 +73,22 @@ async def analyze_policy(request: PolicyAnalyzeRequest):
     except PolicyFetchError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    html_content = request.policy_html
-    if html_content is None:
-        try:
-            fetched = await fetch_public_policy(request.policy_url)
-            html_content = fetched.text
-            safe_source_url = storage_safe_url(fetched.final_url)
-        except PolicyFetchError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with policy_operation_limit:
+        html_content = request.policy_html
+        if html_content is None:
+            try:
+                fetched = await fetch_public_policy(request.policy_url)
+                html_content = fetched.text
+                safe_source_url = storage_safe_url(fetched.final_url)
+            except PolicyFetchError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if len(html_content) > MAX_POLICY_HTML_CHARS:
-        raise HTTPException(status_code=413, detail="Policy content exceeds the size limit")
+        if len(html_content) > MAX_POLICY_HTML_CHARS:
+            raise HTTPException(status_code=413, detail="Policy content exceeds the size limit")
 
-    clean_text = clean_policy_html(html_content)
-    content_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()
-    sections = segment_policy_sections(html_content)
+        clean_text = clean_policy_html(html_content)
+        content_hash = hashlib.sha256(clean_text.encode("utf-8")).hexdigest()
+        sections = segment_policy_sections(html_content)
     site_id = site_id_for_domain(request.domain.lower().rstrip("."))
 
     async with database_connection() as db:
@@ -124,10 +127,10 @@ async def analyze_policy(request: PolicyAnalyzeRequest):
                 sections=[section["section_name"] for section in sections], claims=existing_claims,
             )
 
-    try:
-        claims = await asyncio.wait_for(claim_extractor.process_sections(sections[:30]), timeout=45)
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Policy analysis timed out") from exc
+        try:
+            claims = await asyncio.wait_for(claim_extractor.process_sections(sections[:30]), timeout=45)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Policy analysis timed out") from exc
 
     policy_id = f"pol_{uuid.uuid4().hex}"
     async with database_connection() as db:

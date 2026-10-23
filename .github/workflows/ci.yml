@@ -35,6 +35,24 @@ jobs:
         working-directory: extension
       - run: npm run build
         working-directory: extension
+  browser-e2e:
+    runs-on: ubuntu-latest
+    needs: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+        working-directory: extension
+      - run: npx playwright install --with-deps chromium
+        working-directory: extension
+      - run: npm run build
+        working-directory: extension
+      - run: xvfb-run --auto-servernum npm run test:e2e
+        working-directory: extension
   security:
     runs-on: ubuntu-latest
     steps:

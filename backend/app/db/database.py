@@ -3,6 +3,10 @@ from contextlib import asynccontextmanager
 from app.config import settings
 
 CREATE_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS sites (
     id TEXT PRIMARY KEY,
     domain TEXT UNIQUE NOT NULL,
@@ -92,6 +96,12 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
 );
 """
 
+MIGRATIONS = (
+    (1, "initial_schema"),
+    (2, "scan_policy_and_evidence_provenance"),
+    (3, "retention_indexes"),
+)
+
 
 async def _ensure_column(db, table: str, column: str, declaration: str) -> None:
     cursor = await db.execute(f"PRAGMA table_info({table})")
@@ -104,24 +114,38 @@ async def init_db():
     async with aiosqlite.connect(settings.sqlite_db_path) as db:
         await db.execute("PRAGMA foreign_keys = ON")
         await db.executescript(CREATE_TABLES_SQL)
-        # Additive migrations keep existing local databases readable and safely scoped.
-        await _ensure_column(db, "observations", "scan_session_id", "TEXT")
-        await _ensure_column(db, "observations", "event_id", "TEXT")
-        await _ensure_column(db, "findings", "scan_session_id", "TEXT")
-        await _ensure_column(db, "findings", "policy_id", "TEXT")
-        await _ensure_column(db, "scan_sessions", "policy_id", "TEXT")
-        await _ensure_column(db, "policy_claims", "source_start", "INTEGER")
-        await _ensure_column(db, "policy_claims", "source_end", "INTEGER")
-        await _ensure_column(db, "findings", "rule_version", "TEXT NOT NULL DEFAULT 'v1'")
-        await _ensure_column(db, "risk_snapshots", "scan_session_id", "TEXT")
-        await _ensure_column(db, "risk_snapshots", "evidence_coverage", "REAL NOT NULL DEFAULT 0")
-        await _ensure_column(db, "risk_snapshots", "algorithm_version", "TEXT NOT NULL DEFAULT 'v1'")
-        await _ensure_column(db, "risk_snapshots", "input_summary", "TEXT NOT NULL DEFAULT '{}'")
-        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_scan_event ON observations(scan_session_id, event_id)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_observations_scan_time ON observations(scan_session_id, timestamp)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_policy_site_time ON policies(site_id, retrieved_at)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_risk_site_time ON risk_snapshots(site_id, timestamp)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_scan_site_time ON scan_sessions(site_id, started_at)")
+        applied = {
+            row[0] for row in await (await db.execute("SELECT version FROM schema_migrations")).fetchall()
+        }
+        for version, name in MIGRATIONS:
+            if version in applied:
+                continue
+            if version == 2:
+                await _ensure_column(db, "sites", "first_seen", "TIMESTAMP")
+                await _ensure_column(db, "sites", "last_seen", "TIMESTAMP")
+                await db.execute(
+                    "UPDATE sites SET first_seen = COALESCE(first_seen, CURRENT_TIMESTAMP), "
+                    "last_seen = COALESCE(last_seen, CURRENT_TIMESTAMP)"
+                )
+                await _ensure_column(db, "observations", "scan_session_id", "TEXT")
+                await _ensure_column(db, "observations", "event_id", "TEXT")
+                await _ensure_column(db, "findings", "scan_session_id", "TEXT")
+                await _ensure_column(db, "findings", "policy_id", "TEXT")
+                await _ensure_column(db, "scan_sessions", "policy_id", "TEXT")
+                await _ensure_column(db, "policy_claims", "source_start", "INTEGER")
+                await _ensure_column(db, "policy_claims", "source_end", "INTEGER")
+                await _ensure_column(db, "findings", "rule_version", "TEXT NOT NULL DEFAULT 'v1'")
+                await _ensure_column(db, "risk_snapshots", "scan_session_id", "TEXT")
+                await _ensure_column(db, "risk_snapshots", "evidence_coverage", "REAL NOT NULL DEFAULT 0")
+                await _ensure_column(db, "risk_snapshots", "algorithm_version", "TEXT NOT NULL DEFAULT 'v1'")
+                await _ensure_column(db, "risk_snapshots", "input_summary", "TEXT NOT NULL DEFAULT '{}'")
+            if version == 3:
+                await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_scan_event ON observations(scan_session_id, event_id)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_observations_scan_time ON observations(scan_session_id, timestamp)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_policy_site_time ON policies(site_id, retrieved_at)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_risk_site_time ON risk_snapshots(site_id, timestamp)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_scan_site_time ON scan_sessions(site_id, started_at)")
+            await db.execute("INSERT INTO schema_migrations (version) VALUES (?)", (version,))
         if settings.retention_days > 0:
             stale = await db.execute(
                 "SELECT id FROM sites WHERE last_seen < datetime('now', ?)",

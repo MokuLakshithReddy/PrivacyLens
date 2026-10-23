@@ -41,6 +41,8 @@ Build the extension from `extension/`:
 npm ci
 npm test
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 Load the resulting extension bundle in Chromium's developer extension page. Review its requested site access and keep monitoring disabled until you choose to enable it.

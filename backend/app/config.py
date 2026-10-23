@@ -18,8 +18,11 @@ class Settings:
     sqlite_db_path = os.getenv("PRIVACYLENS_DB_PATH", str(DATA_DIR / "privacylens.db"))
     max_request_bytes = 1_048_576
     retention_days = int(os.getenv("PRIVACYLENS_RETENTION_DAYS", "90"))
+    max_concurrent_policy_operations = int(os.getenv("PRIVACYLENS_MAX_POLICY_OPERATIONS", "2"))
 
     def validate_deployment(self) -> None:
+        if self.max_concurrent_policy_operations < 1:
+            raise RuntimeError("PRIVACYLENS_MAX_POLICY_OPERATIONS must be at least 1.")
         if self.default_ai_provider not in {"mock", "gemini"}:
             raise RuntimeError("PRIVACYLENS_AI_PROVIDER must be 'mock' or 'gemini'.")
         if self.default_ai_provider == "gemini" and not self.gemini_api_key:
