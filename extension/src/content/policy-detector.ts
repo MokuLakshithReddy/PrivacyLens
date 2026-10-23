@@ -20,7 +20,7 @@ export interface DiscoveredPolicyLink {
   url: string;
   anchorText: string;
   source: 'footer' | 'body' | 'meta' | 'standard_link';
-  confidence: number;
+  matchRank: number;
 }
 
 export function detectPolicyLinks(): DiscoveredPolicyLink[] {
@@ -38,7 +38,7 @@ export function detectPolicyLinks(): DiscoveredPolicyLink[] {
           url: fullUrl,
           anchorText: 'meta:link[rel=privacy-policy]',
           source: 'meta',
-          confidence: 0.99
+          matchRank: 0.99
         });
       } catch {
         // ignore invalid url
@@ -63,18 +63,18 @@ export function detectPolicyLinks(): DiscoveredPolicyLink[] {
 
       if (urlMatches || textMatches) {
         const isFooter = !!anchor.closest('footer, [id*="footer" i], [class*="footer" i]');
-        let confidence = 0.5;
-        if (textMatches && urlMatches) confidence = 0.95;
-        else if (textMatches) confidence = 0.85;
-        else if (urlMatches) confidence = 0.75;
+        let matchRank = 0.5;
+        if (textMatches && urlMatches) matchRank = 0.95;
+        else if (textMatches) matchRank = 0.85;
+        else if (urlMatches) matchRank = 0.75;
 
-        if (isFooter) confidence = Math.min(1.0, confidence + 0.1);
+        if (isFooter) matchRank = Math.min(1.0, matchRank + 0.1);
 
         candidates.push({
           url: fullUrl,
           anchorText: text.slice(0, 50),
           source: isFooter ? 'footer' : 'body',
-          confidence
+          matchRank
         });
       }
     } catch {
@@ -82,10 +82,10 @@ export function detectPolicyLinks(): DiscoveredPolicyLink[] {
     }
   }
 
-  // Sort candidates by confidence descending and deduplicate by URL
+  // Sort candidates by matchRank descending and deduplicate by URL
   const uniqueMap = new Map<string, DiscoveredPolicyLink>();
   candidates
-    .sort((a, b) => b.confidence - a.confidence)
+    .sort((a, b) => b.matchRank - a.matchRank)
     .forEach((c) => {
       if (!uniqueMap.has(c.url)) {
         uniqueMap.set(c.url, c);

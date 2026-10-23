@@ -1,13 +1,14 @@
 {
   "name": "privacylens-extension",
   "version": "1.0.0",
-  "description": "PrivacyLens — Evidence-driven browser privacy intelligence (Policy vs. Reality)",
+  "description": "PrivacyLens \u2014 Evidence-driven browser privacy intelligence (Policy vs. Reality)",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.16.0",

@@ -2,6 +2,7 @@ import json
 from fastapi import APIRouter, HTTPException
 import aiosqlite
 from app.config import settings
+from app.db.database import database_connection
 
 router = APIRouter(prefix="/evidence", tags=["Evidence Audit"])
 
@@ -10,7 +11,7 @@ async def get_finding_evidence(finding_id: str):
     """
     Dedicated Evidence Audit API: Returns complete evidentiary backing for any detected finding.
     """
-    async with aiosqlite.connect(settings.sqlite_db_path) as db:
+    async with database_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM findings WHERE id = ?",
@@ -23,4 +24,5 @@ async def get_finding_evidence(finding_id: str):
         finding_dict = dict(row)
         finding_dict["evidence"] = json.loads(finding_dict["evidence_json"])
         del finding_dict["evidence_json"]
+        finding_dict.pop("confidence", None)
         return finding_dict

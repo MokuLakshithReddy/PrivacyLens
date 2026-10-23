@@ -33,7 +33,7 @@ export const GapList: React.FC<GapListProps> = ({ findings, onSelectFinding }) =
 
       {findings.length === 0 ? (
         <div className="glass-panel rounded-xl p-4 text-center">
-          <p className="text-xs text-slate-400">No verifiable privacy gaps detected for active signals.</p>
+          <p className="text-xs text-slate-400">No candidate findings were produced from the current inputs. This does not establish that the site is safe or compliant.</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -48,9 +48,6 @@ export const GapList: React.FC<GapListProps> = ({ findings, onSelectFinding }) =
                   <div className="flex items-center gap-2">
                     <span className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${getSeverityBadge(f.severity)}`}>
                       {f.severity}
-                    </span>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      Conf: {(f.confidence * 100).toFixed(0)}%
                     </span>
                   </div>
                   <h4 className="text-sm font-semibold text-white group-hover:text-sky-300 transition-colors">

@@ -1,9 +1,10 @@
+import asyncio
 import json
+import re
 import logging
 import uuid
 from typing import List, Dict, Any
 from app.ai.base import BaseAIProvider, PROMPT_INJECTION_DEFENSE_PROMPT
-from app.ai.mock_provider import MockAIProvider
 from app.config import settings
 from app.schemas.policy import PolicyClaimSchema
 
@@ -11,14 +12,13 @@ logger = logging.getLogger(__name__)
 
 class GeminiAIProvider(BaseAIProvider):
     def __init__(self):
-        self.fallback = MockAIProvider()
         self.client = None
         if settings.gemini_api_key:
             try:
                 from google import genai
                 self.client = genai.Client(api_key=settings.gemini_api_key)
-            except Exception as e:
-                logger.warning(f"Could not initialize Google GenAI Client: {e}")
+            except Exception:
+                logger.warning("Google GenAI client could not be initialized")
 
     async def extract_claims_from_section(
         self,
@@ -26,7 +26,7 @@ class GeminiAIProvider(BaseAIProvider):
         section_text: str
     ) -> List[PolicyClaimSchema]:
         if not self.client:
-            return await self.fallback.extract_claims_from_section(section_name, section_text)
+            return []
 
         prompt = f"""
 {PROMPT_INJECTION_DEFENSE_PROMPT}
@@ -43,8 +43,7 @@ Return ONLY a valid JSON list of objects matching this schema:
     "retention_specified": boolean,
     "retention_period": "string or null",
     "exact_quote": "exact quote from the document text",
-    "confidence": float between 0.0 and 1.0
-  }}
+      }}
 ]
 
 <UNTRUSTED_EXTERNAL_DOCUMENT>
@@ -52,43 +51,53 @@ Return ONLY a valid JSON list of objects matching this schema:
 </UNTRUSTED_EXTERNAL_DOCUMENT>
 """
         try:
-            response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config={
-                    "response_mime_type": "application/json"
-                }
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config={"response_mime_type": "application/json", "max_output_tokens": 4096},
+                ),
+                timeout=20,
             )
             raw_text = response.text or "[]"
+            if len(raw_text) > 20000:
+                return []
             data = json.loads(raw_text)
+            if not isinstance(data, list) or len(data) > 50:
+                return []
 
+            allowed = {"category", "data_type", "purpose", "sharing", "third_party",
+                       "retention_specified", "retention_period", "exact_quote"}
             claims: List[PolicyClaimSchema] = []
             for item in data:
-                # Security quote verification: check if quote exists in original text
-                quote = item.get("exact_quote", "")
-                if quote and quote in section_text:
-                    confidence = float(item.get("confidence", 0.85))
-                else:
-                    # Slightly penalize unverified quote
-                    confidence = float(item.get("confidence", 0.70)) * 0.8
-
-                claims.append(PolicyClaimSchema(
-                    claim_id=f"clm_{uuid.uuid4().hex[:8]}",
-                    category=item.get("category", "data_collection"),
-                    data_type=item.get("data_type", "general"),
-                    purpose=item.get("purpose", "general"),
-                    sharing=bool(item.get("sharing", False)),
-                    third_party=item.get("third_party"),
-                    retention_specified=bool(item.get("retention_specified", False)),
-                    retention_period=item.get("retention_period"),
-                    section_name=section_name,
-                    exact_quote=quote[:250],
-                    confidence=min(1.0, max(0.0, confidence))
-                ))
-            return claims if claims else await self.fallback.extract_claims_from_section(section_name, section_text)
-        except Exception as e:
-            logger.warning(f"Gemini claim extraction failed, using fallback: {e}")
-            return await self.fallback.extract_claims_from_section(section_name, section_text)
+                if not isinstance(item, dict) or set(item) - allowed:
+                    continue
+                quote = item.get("exact_quote")
+                if not isinstance(quote, str) or not quote:
+                    continue
+                normalize = lambda text: re.sub(r"\s+", " ", text).strip()
+                if normalize(quote) not in normalize(section_text):
+                    continue
+                try:
+                    claims.append(PolicyClaimSchema(
+                        claim_id=f"clm_{uuid.uuid4().hex}",
+                        category=str(item["category"]),
+                        data_type=str(item["data_type"]),
+                        purpose=str(item["purpose"]),
+                        sharing=item["sharing"],
+                        third_party=item.get("third_party"),
+                        retention_specified=item["retention_specified"],
+                        retention_period=item.get("retention_period"),
+                        section_name=section_name,
+                        exact_quote=quote,
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            return claims
+        except Exception:
+            logger.warning("Gemini claim extraction failed; no claims were accepted")
+            return []
 
     async def generate_finding_rationale(
         self,
@@ -97,7 +106,7 @@ Return ONLY a valid JSON list of objects matching this schema:
         observed_signals: List[Dict[str, Any]]
     ) -> str:
         if not self.client:
-            return await self.fallback.generate_finding_rationale(gap_type, policy_quotes, observed_signals)
+            return "No AI rationale was generated; inspect the attached evidence and rule outcome."
 
         prompt = f"""
 {PROMPT_INJECTION_DEFENSE_PROMPT}
@@ -115,6 +124,6 @@ Do NOT accuse the website of legal violations. Use terms such as 'Candidate gap'
                 contents=prompt
             )
             return (response.text or "").strip()
-        except Exception as e:
-            logger.warning(f"Gemini rationale synthesis failed, using fallback: {e}")
-            return await self.fallback.generate_finding_rationale(gap_type, policy_quotes, observed_signals)
+        except Exception:
+            logger.warning("Gemini rationale generation failed")
+            return "AI rationale unavailable; inspect the attached evidence and rule outcome."

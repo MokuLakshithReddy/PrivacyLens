@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SiteAnalysisResult, EvidenceFinding, RiskTier } from '@shared/types';
+import { SiteAnalysisResult, EvidenceFinding } from '@shared/types';
 import { ScoreCard } from './components/ScoreCard';
 import { GapList } from './components/GapList';
 import { PolicyObservedMatrix } from './components/PolicyObservedMatrix';
@@ -15,6 +15,7 @@ export const App: React.FC = () => {
   const [currentDomain, setCurrentDomain] = useState<string>('example.com');
   const [evalMode, setEvalMode] = useState<'backend' | 'edge'>('edge');
   const [isSystemPage, setIsSystemPage] = useState<boolean>(false);
+  const [monitoringEnabled, setMonitoringEnabled] = useState<boolean>(false);
   const [systemPageUrl, setSystemPageUrl] = useState<string>('');
 
   const runAnalysis = async () => {
@@ -22,16 +23,26 @@ export const App: React.FC = () => {
     setIsSystemPage(false);
 
     try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        const state = await chrome.storage.local.get({ monitoringEnabled: false });
+        const enabled = state.monitoringEnabled === true;
+        setMonitoringEnabled(enabled);
+        if (!enabled) {
+          setAnalysis(null);
+          setLoading(false);
+          return;
+        }
+      }
       if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab && tab.id) {
           const tabUrl = tab.url || '';
 
           // Check if user is on an internal browser page (edge://, chrome://, about:)
-          const isInternal = !tabUrl || 
-            tabUrl.startsWith('edge://') || 
-            tabUrl.startsWith('chrome://') || 
-            tabUrl.startsWith('chrome-extension://') || 
+          const isInternal = !tabUrl ||
+            tabUrl.startsWith('edge://') ||
+            tabUrl.startsWith('chrome://') ||
+            tabUrl.startsWith('chrome-extension://') ||
             tabUrl.startsWith('about:');
 
           if (isInternal) {
@@ -49,10 +60,9 @@ export const App: React.FC = () => {
             (response) => {
               if (response && response.analysis) {
                 setAnalysis(response.analysis);
-                setEvalMode(response.analysis.summary.includes('Edge evaluation') ? 'edge' : 'backend');
+                setEvalMode(response.analysis.summary.includes('Local heuristic evaluation') ? 'edge' : 'backend');
               } else {
-                setAnalysis(generateDynamicFallbackAnalysis(parsed.hostname));
-                setEvalMode('edge');
+                setAnalysis(null);
               }
               setLoading(false);
             }
@@ -64,8 +74,21 @@ export const App: React.FC = () => {
       // Standalone browser test mode
     }
 
-    setAnalysis(generateDynamicFallbackAnalysis('example.com'));
+    setAnalysis(null);
     setLoading(false);
+  };
+
+  const toggleMonitoring = async () => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    const next = !monitoringEnabled;
+    await chrome.storage.local.set({ monitoringEnabled: next });
+    setMonitoringEnabled(next);
+    if (next) {
+      await runAnalysis();
+    } else {
+      setAnalysis(null);
+      setLoading(false);
+    }
   };
 
   const exportAuditReport = () => {
@@ -73,10 +96,10 @@ export const App: React.FC = () => {
     const dateStr = new Date(analysis.inspectedAt).toLocaleString();
     const md = `# 🛡️ PrivacyLens Audit Report — ${analysis.domain}
 
-**Inspection Date:** ${dateStr}  
-**Overall Risk Score:** ${analysis.riskScore} / 100 (${analysis.riskTier})  
-**Evidentiary Confidence:** ${(analysis.confidence * 100).toFixed(0)}%  
-**Discovered Policy URL:** ${analysis.policyUrl || 'None Identified'}  
+**Inspection Date:** ${dateStr}
+**Heuristic risk indicator:** ${analysis.riskScore} / 100 (${analysis.riskTier})
+**Evidence coverage estimate:** ${(analysis.evidenceCoverage * 100).toFixed(0)}%
+**Discovered Policy URL:** ${analysis.policyUrl || 'None Identified'}
 
 ---
 
@@ -87,7 +110,6 @@ ${analysis.summary}
 ${analysis.findings
   .map(
     (f, i) => `### ${i + 1}. [${f.severity.toUpperCase()}] ${f.title}
-- **Confidence:** ${(f.confidence * 100).toFixed(0)}%
 - **Rationale:** ${f.rationale}
 - **Policy Citations:** ${
       f.evidence.policyQuotes.length > 0
@@ -154,14 +176,23 @@ ${analysis.dataFlow.thirdParties
           </div>
         </div>
 
-        <button
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={toggleMonitoring}
+            className={`px-2 py-1 rounded border text-[10px] font-mono ${monitoringEnabled ? 'border-amber-500/40 text-amber-300 bg-amber-500/10' : 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10'}`}
+            title={monitoringEnabled ? 'Pause local browser monitoring' : 'Enable local browser monitoring'}
+          >
+            {monitoringEnabled ? 'Pause' : 'Enable'}
+          </button>
+          <button
           onClick={runAnalysis}
-          disabled={loading}
+          disabled={loading || !monitoringEnabled}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           title="Refresh runtime signals"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-blue-400' : ''}`} />
-        </button>
+          </button>
+        </div>
       </header>
 
       {/* Main Content Area */}
@@ -171,6 +202,13 @@ ${analysis.dataFlow.thirdParties
           <p className="text-xs font-mono text-slate-400 tracking-wide text-center">
             Correlating declared policy with runtime telemetry for {currentDomain}...
           </p>
+        </div>
+      ) : !monitoringEnabled ? (
+        <div className="flex-1 flex flex-col justify-center rounded-2xl p-5 space-y-3 my-auto border border-slate-700 bg-slate-900/70">
+          <h2 className="text-sm font-semibold text-white">Monitoring is paused</h2>
+          <p className="text-xs text-slate-300 leading-relaxed">Enable monitoring to collect the current page’s destination origins, request methods and times, plus counts of local and session storage items. PrivacyLens does not read storage keys, storage values, cookies, or request bodies.</p>
+          <p className="text-[11px] text-slate-400">When enabled, network observations and a public privacy policy, if found, may be sent to the local API at 127.0.0.1. The API stores scan records and cleaned policy text on this device. It uses local rules by default; if its operator explicitly configures Gemini, policy text is sent to Google. Pause clears the active in-memory scan; it does not delete API records.</p>
+          <button onClick={toggleMonitoring} className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Enable local monitoring</button>
         </div>
       ) : isSystemPage ? (
         <div className="flex-1 flex flex-col justify-center glass-panel rounded-2xl p-5 space-y-4 my-auto border border-blue-500/20">
@@ -208,7 +246,9 @@ ${analysis.dataFlow.thirdParties
           <ScoreCard
             score={analysis.riskScore}
             tier={analysis.riskTier}
-            confidence={analysis.confidence}
+            evidenceCoverage={analysis.evidenceCoverage}
+            riskFactors={analysis.riskFactors}
+            riskWeights={analysis.riskWeights}
             domain={analysis.domain || currentDomain}
           />
 
@@ -269,44 +309,17 @@ ${analysis.dataFlow.thirdParties
 
           {activeTab === 'matrix' && (
             <PolicyObservedMatrix
-              rows={[
-                {
-                  category: 'Advertising Networks',
-                  declared: analysis.dataFlow.thirdParties.some((p) => p.category === 'advertising' && p.disclosedInPolicy),
-                  declarationSummary: analysis.dataFlow.thirdParties.some((p) => p.category === 'advertising')
-                    ? 'Ad distribution'
-                    : 'None disclosed',
-                  observedCount: analysis.dataFlow.thirdParties.filter((p) => p.category === 'advertising').length,
-                  observedDetail: `${analysis.dataFlow.thirdParties.filter((p) => p.category === 'advertising').length} active ad exchanges`,
-                  status: analysis.dataFlow.thirdParties.some((p) => p.category === 'advertising') ? 'gap' : 'aligned'
-                },
-                {
-                  category: 'Usage & Analytics',
-                  declared: true,
-                  declarationSummary: 'Performance & traffic',
-                  observedCount: analysis.dataFlow.thirdParties.filter((p) => p.category === 'analytics').length,
-                  observedDetail: `${analysis.dataFlow.thirdParties.filter((p) => p.category === 'analytics').length} telemetry trackers`,
-                  status: 'aligned'
-                },
-                {
-                  category: 'Persistent Storage',
-                  declared: true,
-                  declarationSummary: 'Session identifiers',
-                  observedCount: Math.max(1, analysis.observedThirdPartiesCount * 2),
-                  observedDetail: `${Math.max(1, analysis.observedThirdPartiesCount * 2)} persistent keys`,
-                  status: 'aligned'
-                },
-                {
-                  category: 'Browser Capabilities',
+              rows={(['advertising', 'analytics', 'social'] as const).map((category) => {
+                const observed = analysis.dataFlow.thirdParties.filter((p) => p.category === category);
+                return {
+                  category: category[0].toUpperCase() + category.slice(1),
                   declared: false,
-                  declarationSummary: 'Standard permissions',
-                  observedCount: analysis.findings.some((f) => f.gapType === 'permission_mismatch') ? 1 : 0,
-                  observedDetail: analysis.findings.some((f) => f.gapType === 'permission_mismatch')
-                    ? 'Geolocation queried'
-                    : 'Zero sensitive APIs queried',
-                  status: analysis.findings.some((f) => f.gapType === 'permission_mismatch') ? 'gap' : 'aligned'
-                }
-              ]}
+                  declarationSummary: 'Policy claims are not available in this view',
+                  observedCount: observed.length,
+                  observedDetail: `${observed.length} observed destination(s)`,
+                  status: 'unverified' as const
+                };
+              })}
             />
           )}
 
@@ -320,40 +333,22 @@ ${analysis.dataFlow.thirdParties
           {activeTab === 'timeline' && (
             <div className="glass-panel rounded-xl p-3.5 space-y-2.5">
               <div className="flex items-center justify-between text-xs font-mono uppercase tracking-wider text-slate-400">
-                <span>Temporal Posture Tracking</span>
-                <span className="text-emerald-400 text-[10px]">Active Session</span>
+                <span>Current Scan</span>
+                <span className="text-sky-400 text-[10px]">Session only</span>
               </div>
-              <div className="space-y-2 text-xs">
-                <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center justify-between">
-                  <div>
-                    <div className="font-semibold text-slate-200">Current Inspection</div>
-                    <div className="text-[10px] text-slate-400 font-mono">Real-time Runtime</div>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-mono font-bold text-sky-400">{analysis.riskScore}</span>
-                    <span className="text-[10px] text-slate-400"> / 100</span>
-                  </div>
+              <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-slate-200">Heuristic risk indicator</div>
+                  <div className="text-[10px] text-slate-400 font-mono">No historical baseline available</div>
                 </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-900/40 border border-slate-800/60 flex items-center justify-between opacity-70">
-                  <div>
-                    <div className="font-medium text-slate-300">Baseline Target</div>
-                    <div className="text-[10px] text-slate-500 font-mono">First Seen</div>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-mono font-bold text-slate-300">
-                      {Math.max(10, analysis.riskScore - 6)}
-                    </span>
-                    <span className="text-[10px] text-slate-500"> / 100</span>
-                  </div>
+                <div className="text-right">
+                  <span className="font-mono font-bold text-sky-400">{analysis.riskScore}</span>
+                  <span className="text-[10px] text-slate-400"> / 100</span>
                 </div>
-
-                <div className="p-2 rounded bg-slate-800/50 border border-slate-700/50 text-[11px] text-slate-300 flex items-center gap-2">
-                  <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                  <span>
-                    Observed {analysis.observedThirdPartiesCount} third-party destination(s) across this site session.
-                  </span>
-                </div>
+              </div>
+              <div className="p-2 rounded bg-slate-800/50 border border-slate-700/50 text-[11px] text-slate-300 flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span>Observed {analysis.observedThirdPartiesCount} third-party destination(s) in this scan session.</span>
               </div>
             </div>
           )}
@@ -369,7 +364,13 @@ ${analysis.dataFlow.thirdParties
             </button>
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-2">
+          <Activity className="w-7 h-7 text-slate-500" />
+          <h2 className="text-sm font-semibold text-slate-200">No scan evidence available</h2>
+          <p className="text-xs text-slate-400">Enable monitoring and refresh to inspect the current browser session. The extension uses the local API when available; otherwise it shows local network heuristics only. No sample results are shown as live findings.</p>
+        </div>
+      )}
 
       {/* Evidentiary Audit Modal */}
       <EvidenceModal
@@ -379,90 +380,3 @@ ${analysis.dataFlow.thirdParties
     </div>
   );
 };
-
-// Generates dynamic analysis specific to the current domain when in standalone mode
-function generateDynamicFallbackAnalysis(domain: string): SiteAnalysisResult {
-  let hash = 0;
-  for (let i = 0; i < domain.length; i++) {
-    hash = (hash << 5) - hash + domain.charCodeAt(i);
-    hash |= 0;
-  }
-  const positiveHash = Math.abs(hash);
-
-  const isCleanSite = ['github.com', 'wikipedia.org', 'archive.org', 'gnu.org'].some((clean) =>
-    domain.includes(clean)
-  );
-
-  const thirdPartiesPool = [
-    { domain: 'google-analytics.com', category: 'analytics' as const },
-    { domain: 'doubleclick.net', category: 'advertising' as const },
-    { domain: 'adnxs.com', category: 'advertising' as const },
-    { domain: 'connect.facebook.net', category: 'social' as const },
-    { domain: 'cdnjs.cloudflare.com', category: 'cdn' as const }
-  ];
-
-  const selectedTP = isCleanSite
-    ? [{ domain: 'cdnjs.cloudflare.com', category: 'cdn' as const, requestCount: 2, disclosedInPolicy: true }]
-    : thirdPartiesPool.slice(0, 2 + (positiveHash % 3)).map((tp, idx) => ({
-        ...tp,
-        requestCount: 1 + ((positiveHash + idx) % 5),
-        disclosedInPolicy: tp.category === 'cdn' || tp.category === 'analytics'
-      }));
-
-  const adCount = selectedTP.filter((p) => p.category === 'advertising').length;
-  const rawScore = isCleanSite ? 14 : 20 + adCount * 22 + (selectedTP.length * 6);
-  const riskScore = Math.min(100, Math.max(12, rawScore));
-
-  let riskTier: RiskTier = 'Low';
-  if (riskScore <= 20) riskTier = 'Very Low';
-  else if (riskScore <= 40) riskTier = 'Low';
-  else if (riskScore <= 60) riskTier = 'Moderate';
-  else if (riskScore <= 80) riskTier = 'High';
-  else riskTier = 'Critical';
-
-  const findings: EvidenceFinding[] = [];
-  if (adCount > 0) {
-    findings.push({
-      findingId: `gap_ad_${domain.replace(/[^a-z0-9]/gi, '_')}`,
-      gapType: 'omission_advertising',
-      severity: 'high',
-      confidence: 0.91,
-      title: 'Undisclosed Advertising Network Connections',
-      rationale: `Outbound telemetry captured network requests to advertising network(s) while published policy specifies primary functional usage.`,
-      evidence: {
-        policyQuotes: [`Policy terms located for ${domain}`],
-        observedDomains: selectedTP.filter((p) => p.category === 'advertising').map((p) => p.domain)
-      }
-    });
-  } else {
-    findings.push({
-      findingId: `clean_${domain.replace(/[^a-z0-9]/gi, '_')}`,
-      gapType: 'broad_language_concern',
-      severity: 'low',
-      confidence: 0.94,
-      title: 'Minimal Tracking Footprint',
-      rationale: `Zero external advertising exchanges detected contacting third-party origins during active session.`,
-      evidence: {
-        policyQuotes: [`Disclosed endpoints on ${domain}`],
-        observedDomains: selectedTP.map((p) => p.domain)
-      }
-    });
-  }
-
-  return {
-    domain,
-    policyUrl: `https://${domain}/privacy`,
-    inspectedAt: new Date().toISOString(),
-    riskScore,
-    riskTier,
-    confidence: isCleanSite ? 0.92 : 0.84,
-    summary: `Analyzed runtime signals for ${domain}.`,
-    claimsCount: isCleanSite ? 3 : 7,
-    observedThirdPartiesCount: selectedTP.length,
-    findings,
-    dataFlow: {
-      firstParty: domain,
-      thirdParties: selectedTP
-    }
-  };
-}

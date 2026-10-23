@@ -1,6 +1,6 @@
 import React from 'react';
 import { EvidenceFinding } from '@shared/types';
-import { X, Quote, Network, Key, ShieldAlert } from 'lucide-react';
+import { X, Quote, Network, ShieldAlert } from 'lucide-react';
 
 interface EvidenceModalProps {
   finding: EvidenceFinding | null;
@@ -20,9 +20,6 @@ export const EvidenceModal: React.FC<EvidenceModalProps> = ({ finding, onClose }
               <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold">
                 {finding.severity} Severity
               </span>
-              <span className="text-[11px] font-mono text-sky-400">
-                Confidence: {(finding.confidence * 100).toFixed(0)}%
-              </span>
             </div>
             <h3 className="text-sm font-bold text-white tracking-tight">{finding.title}</h3>
           </div>
@@ -34,7 +31,12 @@ export const EvidenceModal: React.FC<EvidenceModalProps> = ({ finding, onClose }
           </button>
         </div>
 
-        {/* AI Rationale */}
+        <div className="text-[10px] font-mono text-slate-500 break-all">
+          Scan {finding.scanSessionId} · Policy {finding.policyVersionId} · Rule {finding.ruleId} ({finding.ruleVersion})
+          <div>Observed event IDs: {finding.evidence.observedEventIds.join(', ') || 'Not available'}</div>
+        </div>
+
+        {/* Evidence rationale */}
         <div className="space-y-1.5">
           <div className="text-[11px] font-mono uppercase text-slate-400 flex items-center gap-1.5">
             <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
@@ -84,26 +86,6 @@ export const EvidenceModal: React.FC<EvidenceModalProps> = ({ finding, onClose }
             ))}
           </div>
         </div>
-
-        {/* Storage Keys if applicable */}
-        {finding.evidence.observedStorageKeys && finding.evidence.observedStorageKeys.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-[11px] font-mono uppercase text-slate-400 flex items-center gap-1.5">
-              <Key className="w-3.5 h-3.5 text-purple-400" />
-              Observable Storage Namespaces
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {finding.evidence.observedStorageKeys.map((k, idx) => (
-                <span
-                  key={idx}
-                  className="text-[11px] font-mono px-2 py-1 rounded bg-slate-900 border border-slate-800 text-purple-300"
-                >
-                  {k}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
 
         <button
           onClick={onClose}

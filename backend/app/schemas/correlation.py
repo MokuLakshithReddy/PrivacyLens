@@ -1,39 +1,54 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class FindingEvidenceSchema(BaseModel):
-    policyQuotes: List[str] = []
-    observedDomains: List[str] = []
-    observedStorageKeys: Optional[List[str]] = None
+    model_config = ConfigDict(extra="forbid")
+    policyQuotes: List[str] = Field(default_factory=list, max_length=10)
+    observedDomains: List[str] = Field(default_factory=list, max_length=100)
+    observedEventIds: List[str] = Field(default_factory=list, max_length=100)
+    observedStorageCount: Optional[int] = Field(default=None, ge=0)
     observedPermissions: Optional[List[str]] = None
 
+
 class EvidenceFindingSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     findingId: str
+    scanSessionId: str
+    policyVersionId: str
+    ruleId: str
+    ruleVersion: str
     gapType: str
     severity: str
-    confidence: float
     title: str
     rationale: str
     evidence: FindingEvidenceSchema
 
+
 class ThirdPartyNodeSchema(BaseModel):
-    domain: string if False else str
+    domain: str
     category: str
     requestCount: int
     disclosedInPolicy: bool
 
+
 class DataFlowSchema(BaseModel):
     firstParty: str
     thirdParties: List[ThirdPartyNodeSchema]
+
 
 class TemporalChangeSchema(BaseModel):
     previousScore: Optional[int] = None
     scoreDelta: Optional[int] = None
     newThirdParties: Optional[List[str]] = None
 
+
 class CorrelateRequest(BaseModel):
-    domain: str
-    policy_url: Optional[str] = None
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    domain: str = Field(min_length=1, max_length=253)
+    scan_session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,80}$")
+    policy_url: Optional[str] = Field(default=None, max_length=2048)
+
 
 class SiteAnalysisResultSchema(BaseModel):
     domain: str
@@ -41,7 +56,10 @@ class SiteAnalysisResultSchema(BaseModel):
     inspectedAt: str
     riskScore: int = Field(ge=0, le=100)
     riskTier: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    evidenceCoverage: float = Field(ge=0.0, le=1.0)
+    riskFactors: dict[str, int]
+    riskWeights: dict[str, float]
+    algorithmVersion: str
     summary: str
     claimsCount: int
     observedThirdPartiesCount: int

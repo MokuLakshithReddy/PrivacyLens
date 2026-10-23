@@ -38,6 +38,8 @@ backend/data/*.db
 # Node & Frontend
 node_modules/
 extension/node_modules/
+.taskdeps/
+.tasktmp/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

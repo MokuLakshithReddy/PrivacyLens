@@ -1,47 +1,54 @@
-import hashlib
+import time
 import uuid
+
 from fastapi import APIRouter
-import aiosqlite
 from app.config import settings
+from app.db.database import database_connection
+from app.core.domain_identity import site_id_for_domain
 from app.schemas.observation import ObservationIngestRequest, ObservationIngestResponse
 
 router = APIRouter(prefix="/observations", tags=["Observations"])
 
+
 @router.post("/ingest", response_model=ObservationIngestResponse)
 async def ingest_observations(request: ObservationIngestRequest):
+    """Persist bounded network metadata for one scan session. Storage and permission
+    fields are deliberately unsupported and never accepted or reported as stored.
     """
-    Ingests sanitized telemetry signals from the browser extension.
-    THREAT MODEL: Strictly metadata only (domain names, categories, isThirdParty).
-    """
-    site_id = f"site_{hashlib.md5(request.domain.encode()).hexdigest()[:8]}"
-    third_party_count = sum(1 for r in request.requests if r.isThirdParty)
+    domain = request.domain.lower().rstrip(".")
+    site_id = site_id_for_domain(domain)
+    stored = 0
+    third_party_stored = 0
 
-    async with aiosqlite.connect(settings.sqlite_db_path) as db:
-        # Upsert site
+    async with database_connection() as db:
+        await db.execute("INSERT OR IGNORE INTO sites (id, domain) VALUES (?, ?)", (site_id, domain))
+        await db.execute("UPDATE sites SET last_seen = CURRENT_TIMESTAMP WHERE id = ?", (site_id,))
         await db.execute(
-            "INSERT OR IGNORE INTO sites (id, domain) VALUES (?, ?)",
-            (site_id, request.domain)
+            "INSERT OR IGNORE INTO scan_sessions (id, site_id) VALUES (?, ?)",
+            (request.scan_session_id, site_id),
         )
-        await db.execute(
-            "UPDATE sites SET last_seen = CURRENT_TIMESTAMP WHERE id = ?",
-            (site_id,)
-        )
-
-        # Batch insert network observations
-        for req in request.requests:
-            obs_id = f"obs_{uuid.uuid4().hex[:8]}"
+        for signal in request.requests:
+            event_id = signal.requestId or uuid.uuid4().hex
             await db.execute(
-                """INSERT INTO observations (
-                    id, site_id, timestamp, target_domain, is_third_party, category, initiator, method
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (obs_id, site_id, req.timestamp or 0, req.targetDomain, 1 if req.isThirdParty else 0,
-                 req.category, req.initiator or "", req.method or "GET")
+                """INSERT OR IGNORE INTO observations (
+                    id, site_id, scan_session_id, event_id, timestamp, target_domain,
+                    is_third_party, category, initiator, method
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (f"obs_{uuid.uuid4().hex}", site_id, request.scan_session_id, event_id,
+                 signal.timestamp if signal.timestamp is not None else int(time.time() * 1000),
+                 signal.targetDomain, int(signal.isThirdParty), signal.category,
+                 signal.initiator or "", signal.method),
             )
-
+            cursor = await db.execute("SELECT changes()")
+            inserted = (await cursor.fetchone())[0] > 0
+            if inserted:
+                stored += 1
+                third_party_stored += int(signal.isThirdParty)
         await db.commit()
 
     return ObservationIngestResponse(
         status="ingested",
-        records_stored=len(request.requests) + len(request.storage_keys),
-        third_party_count=third_party_count
+        records_stored=stored,
+        third_party_count=third_party_stored,
+        unsupported_categories=["storage", "permissions"],
     )

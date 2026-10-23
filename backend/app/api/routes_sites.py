@@ -1,13 +1,12 @@
-import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 import aiosqlite
 from app.config import settings
-from app.ai.gemini_provider import GeminiAIProvider
-from app.ai.mock_provider import MockAIProvider
+from app.db.database import database_connection
+from app.core.domain_identity import site_id_for_domain
 from app.core.correlation_engine import CorrelationEngine
 from app.core.risk_engine import RiskEngine
 from app.schemas.policy import PolicyClaimSchema
@@ -23,11 +22,6 @@ from app.schemas.correlation import (
 
 router = APIRouter(prefix="", tags=["Correlation & Sites"])
 
-def get_ai_provider():
-    if settings.default_ai_provider == "gemini":
-        return GeminiAIProvider()
-    return MockAIProvider()
-
 @router.post("/correlate", response_model=SiteAnalysisResultSchema)
 async def correlate_site(request: CorrelateRequest):
     """
@@ -35,21 +29,33 @@ async def correlate_site(request: CorrelateRequest):
     Computes deterministic risk score and detects Policy vs. Reality gaps.
     """
     domain = request.domain
-    site_id = f"site_{hashlib.md5(domain.encode()).hexdigest()[:8]}"
-    ai_provider = get_ai_provider()
-    correlation_engine = CorrelationEngine(ai_provider)
+    site_id = site_id_for_domain(domain)
+    correlation_engine = CorrelationEngine()
 
-    async with aiosqlite.connect(settings.sqlite_db_path) as db:
+    async with database_connection() as db:
         db.row_factory = aiosqlite.Row
 
-        # 1. Fetch claims for domain
+        # A scan can only use the newest policy version available for this site.
         cursor = await db.execute(
-            """SELECT c.* FROM policy_claims c
-               JOIN policies p ON c.policy_id = p.id
-               WHERE p.site_id = ? ORDER BY p.retrieved_at DESC LIMIT 50""",
-            (site_id,)
+            "SELECT id FROM scan_sessions WHERE id = ? AND site_id = ?",
+            (request.scan_session_id, site_id),
         )
-        claims_rows = await cursor.fetchall()
+        if await cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Scan session not found for this site")
+
+        cursor = await db.execute(
+            "SELECT id FROM policies WHERE site_id = ? ORDER BY retrieved_at DESC LIMIT 1",
+            (site_id,),
+        )
+        policy_row = await cursor.fetchone()
+        policy_id = policy_row["id"] if policy_row else None
+
+        # 1. Fetch claims for this exact policy version.
+        cursor = await db.execute(
+            "SELECT * FROM policy_claims WHERE policy_id = ? LIMIT 50",
+            (policy_id,),
+        ) if policy_id else None
+        claims_rows = await cursor.fetchall() if cursor else []
         claims: List[PolicyClaimSchema] = [
             PolicyClaimSchema(
                 claim_id=r["id"],
@@ -62,21 +68,21 @@ async def correlate_site(request: CorrelateRequest):
                 retention_period=r["retention_period"],
                 section_name=r["section_name"],
                 exact_quote=r["exact_quote"],
-                confidence=r["confidence"]
             )
             for r in claims_rows
         ]
 
         # 2. Fetch observations for domain
         cursor = await db.execute(
-            """SELECT * FROM observations WHERE site_id = ? ORDER BY timestamp DESC LIMIT 60""",
-            (site_id,)
+            """SELECT * FROM observations WHERE site_id = ? AND scan_session_id = ?
+               ORDER BY timestamp DESC LIMIT 200""",
+            (site_id, request.scan_session_id)
         )
         obs_rows = await cursor.fetchall()
         requests: List[NetworkSignalSchema] = [
             NetworkSignalSchema(
-                requestId=r["id"],
-                url=r["target_domain"],
+                requestId=r["event_id"] or r["id"],
+                url=f"https://{r['target_domain']}",
                 targetDomain=r["target_domain"],
                 initiator=r["initiator"],
                 isThirdParty=bool(r["is_third_party"]),
@@ -93,11 +99,13 @@ async def correlate_site(request: CorrelateRequest):
             claims=claims,
             requests=requests,
             storage_keys=[],
-            permissions=[]
+            permissions=[],
+            scan_session_id=request.scan_session_id,
+            policy_version_id=policy_id,
         )
 
-        # 4. Compute Deterministic Risk & Confidence
-        risk_score, risk_tier, confidence = RiskEngine.compute_risk_and_confidence(
+        # 4. Compute deterministic risk indicators and input coverage estimate
+        risk_score, risk_tier, evidence_coverage, risk_factors = RiskEngine.compute_risk(
             claims=claims,
             requests=requests,
             storage_keys=[],
@@ -109,16 +117,22 @@ async def correlate_site(request: CorrelateRequest):
         for f in findings:
             await db.execute(
                 """INSERT OR REPLACE INTO findings (
-                    id, site_id, gap_type, severity, confidence, title, rationale, evidence_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (f.findingId, site_id, f.gapType, f.severity, f.confidence, f.title,
-                 f.rationale, f.evidence.model_dump_json())
+                    id, site_id, scan_session_id, policy_id, rule_version, gap_type,
+                    severity, confidence, title, rationale, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (f.findingId, site_id, request.scan_session_id, policy_id, "rules-v1",
+                 f.gapType, f.severity, 0.0, f.title, f.rationale,
+                 f.evidence.model_dump_json())
             )
 
         snap_id = f"snp_{uuid.uuid4().hex[:8]}"
         await db.execute(
-            "INSERT INTO risk_snapshots (id, site_id, score, tier, confidence) VALUES (?, ?, ?, ?, ?)",
-            (snap_id, site_id, risk_score, risk_tier, confidence)
+            """INSERT INTO risk_snapshots (
+                id, site_id, scan_session_id, algorithm_version, input_summary, score, tier, confidence, evidence_coverage
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (snap_id, site_id, request.scan_session_id, "risk-v2",
+             json.dumps({"claims": len(claims), "observations": len(requests), "findings": len(findings)}),
+             risk_score, risk_tier, 0.0, evidence_coverage)
         )
         await db.commit()
 
@@ -164,12 +178,16 @@ async def correlate_site(request: CorrelateRequest):
 
     return SiteAnalysisResultSchema(
         domain=domain,
-        policyUrl=request.policy_url,
-        inspectedAt=datetime.utcnow().isoformat(),
+        policyUrl=(request.policy_url.split("?", 1)[0].split("#", 1)[0] if request.policy_url else None),
+        inspectedAt=datetime.now(timezone.utc).isoformat(),
         riskScore=risk_score,
         riskTier=risk_tier,
-        confidence=confidence,
-        summary=f"Automated evaluation completed with {len(findings)} detected gap candidates across {len(requests)} observable signals.",
+        evidenceCoverage=evidence_coverage,
+        riskFactors=risk_factors,
+        riskWeights=RiskEngine.WEIGHTS,
+        algorithmVersion="risk-v2",
+        summary=(f"Heuristic risk indicators were calculated from {len(claims)} policy claims and "
+                 f"{len(requests)} observations in this scan. No finding is not a safety or compliance assessment."),
         claimsCount=len(claims),
         observedThirdPartiesCount=len(third_parties_nodes),
         findings=findings,
@@ -185,11 +203,11 @@ async def get_site_temporal_diff(domain: str):
     """
     Returns temporal risk score evolution and policy changes for the domain.
     """
-    site_id = f"site_{hashlib.md5(domain.encode()).hexdigest()[:8]}"
-    async with aiosqlite.connect(settings.sqlite_db_path) as db:
+    site_id = site_id_for_domain(domain)
+    async with database_connection() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT score, tier, confidence, timestamp FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC LIMIT 10",
+            "SELECT score, tier, evidence_coverage, timestamp FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC LIMIT 10",
             (site_id,)
         )
         rows = await cursor.fetchall()

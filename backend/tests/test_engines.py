@@ -3,7 +3,6 @@ from app.schemas.policy import PolicyClaimSchema
 from app.schemas.observation import NetworkSignalSchema, StorageSignalSchema
 from app.core.risk_engine import RiskEngine
 from app.core.correlation_engine import CorrelationEngine
-from app.ai.mock_provider import MockAIProvider
 from app.core.policy_parser import clean_policy_html, segment_policy_sections
 
 def test_clean_policy_html():
@@ -36,7 +35,6 @@ def test_deterministic_risk_engine():
             retention_specified=True,
             section_name="Analytics",
             exact_quote="We collect anonymized telemetry.",
-            confidence=0.9
         )
     ]
     requests = [
@@ -49,15 +47,15 @@ def test_deterministic_risk_engine():
     ]
     findings = []
 
-    score, tier, conf = RiskEngine.compute_risk_and_confidence(claims, requests, [], findings, True)
+    score, tier, coverage, factors = RiskEngine.compute_risk(claims, requests, [], findings, True)
     assert score <= 30
     assert tier in ["Very Low", "Low"]
-    assert 0.0 < conf <= 1.0
+    assert 0.0 <= coverage <= 1.0
+    assert "tracking" in factors
 
 @pytest.mark.asyncio
 async def test_gap_detection_omission_advertising():
-    mock_ai = MockAIProvider()
-    engine = CorrelationEngine(mock_ai)
+    engine = CorrelationEngine()
 
     # Policy declares ONLY essential analytics
     claims = [
@@ -70,7 +68,6 @@ async def test_gap_detection_omission_advertising():
             retention_specified=False,
             section_name="General",
             exact_quote="We only collect system logs for uptime.",
-            confidence=0.95
         )
     ]
 
@@ -89,10 +86,13 @@ async def test_gap_detection_omission_advertising():
         claims=claims,
         requests=requests,
         storage_keys=[],
-        permissions=[]
+        permissions=[],
+        scan_session_id="scan_test_0001",
+        policy_version_id="policy_test_0001",
     )
 
     assert len(findings) == 1
     assert findings[0].gapType == "omission_advertising"
     assert findings[0].severity == "high"
+    assert "potential" in findings[0].title.lower()
     assert "adservice.google.com" in findings[0].evidence.observedDomains

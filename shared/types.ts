@@ -3,23 +3,23 @@
  * Used across Extension (TypeScript) and aligned with Backend Pydantic Schemas.
  */
 
-export type RequestCategory = 
-  | 'analytics' 
-  | 'advertising' 
-  | 'social' 
-  | 'cdn' 
-  | 'essential' 
-  | 'telemetry' 
+export type RequestCategory =
+  | 'analytics'
+  | 'advertising'
+  | 'social'
+  | 'cdn'
+  | 'essential'
+  | 'telemetry'
   | 'unknown';
 
 export type RiskTier = 'Very Low' | 'Low' | 'Moderate' | 'High' | 'Critical';
 
-export type GapType = 
-  | 'omission_advertising' 
-  | 'omission_analytics' 
-  | 'broad_language_concern' 
-  | 'permission_mismatch' 
-  | 'undisclosed_third_party' 
+export type GapType =
+  | 'omission_advertising'
+  | 'omission_analytics'
+  | 'broad_language_concern'
+  | 'permission_mismatch'
+  | 'undisclosed_third_party'
   | 'excessive_persistence';
 
 export type FindingSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -36,11 +36,10 @@ export interface NetworkSignal {
 }
 
 export interface StorageSignal {
-  type: 'cookie' | 'localStorage' | 'sessionStorage';
-  name: string;
+  type: 'localStorage' | 'sessionStorage';
+  count: number;
   isThirdParty: boolean;
   persistent: boolean;
-  byteLength?: number;
 }
 
 export interface PermissionSignal {
@@ -51,6 +50,7 @@ export interface PermissionSignal {
 
 export interface TabObservationBatch {
   domain: string;
+  scanSessionId: string;
   tabUrl: string;
   policyUrl?: string;
   timestamp: number;
@@ -70,20 +70,23 @@ export interface PolicyClaim {
   retentionPeriod?: string;
   sectionName: string;
   exactQuote: string;
-  confidence: number;
 }
 
 export interface EvidenceFinding {
   findingId: string;
+  scanSessionId: string;
+  policyVersionId: string;
+  ruleId: string;
+  ruleVersion: string;
   gapType: GapType;
   severity: FindingSeverity;
-  confidence: number;
   title: string;
   rationale: string;
   evidence: {
     policyQuotes: string[];
     observedDomains: string[];
-    observedStorageKeys?: string[];
+    observedEventIds: string[];
+    observedStorageCount?: number;
     observedPermissions?: string[];
   };
 }
@@ -94,7 +97,10 @@ export interface SiteAnalysisResult {
   inspectedAt: string;
   riskScore: number;
   riskTier: RiskTier;
-  confidence: number;
+  evidenceCoverage: number;
+  riskFactors: Record<string, number>;
+  riskWeights: Record<string, number>;
+  algorithmVersion: string;
   summary: string;
   claimsCount: number;
   observedThirdPartiesCount: number;

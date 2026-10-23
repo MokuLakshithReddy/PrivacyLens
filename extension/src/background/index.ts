@@ -4,11 +4,22 @@
  */
 
 import { parseRequestSignal } from './network/traffic-observer';
-import { PermissionObserver } from './permissions/permission-observer';
 import { TabObservationStore } from './messaging/message-router';
 
 const store = new TabObservationStore();
-const permissions = new PermissionObserver();
+let monitoringEnabled = false;
+void chrome.storage.local.get({ monitoringEnabled: false }).then((state) => {
+  monitoringEnabled = state.monitoringEnabled === true;
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.monitoringEnabled) {
+    monitoringEnabled = changes.monitoringEnabled.newValue === true;
+    if (!monitoringEnabled) {
+      store.clearAll();
+      void chrome.action.setBadgeText({ text: '' });
+    }
+  }
+});
 
 /**
  * Updates the extension badge on the browser toolbar with the calculated risk score
@@ -34,7 +45,7 @@ function updateTabBadge(tabId: number, score: number) {
 
 // Tab navigation lifecycle
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading' && tab.url) {
+  if (monitoringEnabled && changeInfo.status === 'loading' && tab.url) {
     store.initTab(tabId, tab.url);
     // Reset badge while loading
     chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
@@ -57,7 +68,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     // Only capture requests associated with standard tabs (tabId >= 0)
-    if (details.tabId >= 0) {
+    if (monitoringEnabled && details.tabId >= 0) {
       const signal = parseRequestSignal(details);
       if (signal) {
         let session = store.getSession(details.tabId);
@@ -81,30 +92,58 @@ chrome.webRequest.onBeforeRequest.addListener(
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id;
 
-  if (message.type === 'CONTENT_SIGNALS_DETECTED' && tabId !== undefined) {
+  if (message.type === 'CONTENT_SIGNALS_DETECTED' && tabId !== undefined &&
+      sender.id === chrome.runtime.id && sender.frameId === 0 && message.payload &&
+      typeof message.payload === 'object') {
     const { policyLinks, storageSignals } = message.payload;
-    if (policyLinks && policyLinks.length > 0) {
-      store.setPolicyUrl(tabId, policyLinks[0].url);
+    if (!monitoringEnabled) {
+      sendResponse({ status: 'monitoring_paused' });
+      return false;
     }
-    if (storageSignals) {
-      store.setStorageSignals(tabId, storageSignals);
+    const currentUrl = sender.tab?.url || message.payload.url;
+    if (!store.getSession(tabId) && typeof currentUrl === 'string') {
+      store.initTab(tabId, currentUrl);
+    }
+    if (Array.isArray(policyLinks)) {
+      const safeLink = policyLinks.slice(0, 20).find((item: any) => {
+        if (!item || typeof item.url !== 'string' || item.url.length > 2048) return false;
+        try { return ['http:', 'https:'].includes(new URL(item.url).protocol); } catch { return false; }
+      });
+      if (safeLink) {
+        const policyUrl = new URL(safeLink.url);
+        policyUrl.search = '';
+        policyUrl.hash = '';
+        store.setPolicyUrl(tabId, policyUrl.toString());
+      }
+    }
+    if (Array.isArray(storageSignals)) {
+      const safeSignals = storageSignals.filter((item: any) => item &&
+        ['localStorage', 'sessionStorage'].includes(item.type) &&
+        Number.isSafeInteger(item.count) && item.count >= 0 && item.count <= 100000);
+      store.setStorageSignals(tabId, safeSignals);
     }
     sendResponse({ status: 'acknowledged' });
     return true;
   }
 
-  if (message.type === 'GET_TAB_SIGNALS') {
+  if (message.type === 'GET_TAB_SIGNALS' && sender.id === chrome.runtime.id && !sender.tab) {
     const targetTabId = message.tabId;
     const session = store.getSession(targetTabId);
     sendResponse({ session: session || null });
     return true;
   }
 
-  if (message.type === 'ANALYZE_ACTIVE_TAB') {
+  if (message.type === 'ANALYZE_ACTIVE_TAB' && sender.id === chrome.runtime.id && !sender.tab) {
     const targetTabId = message.tabId;
 
     (async () => {
       try {
+        const currentSettings = await chrome.storage.local.get({ monitoringEnabled: false });
+        monitoringEnabled = currentSettings.monitoringEnabled === true;
+        if (!monitoringEnabled) {
+          sendResponse({ error: 'Monitoring is paused. Enable it in PrivacyLens to inspect this site.' });
+          return;
+        }
         let session = store.getSession(targetTabId);
 
         // If session was not initialized yet, query active tab info
@@ -125,7 +164,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const domEvidence = await chrome.tabs.sendMessage(targetTabId, { type: 'GET_DOM_EVIDENCE' });
           if (domEvidence) {
             if (domEvidence.policyLinks && domEvidence.policyLinks.length > 0) {
-              store.setPolicyUrl(targetTabId, domEvidence.policyLinks[0].url);
+              const policyUrl = new URL(domEvidence.policyLinks[0].url);
+              if (['http:', 'https:'].includes(policyUrl.protocol)) {
+                policyUrl.search = '';
+                policyUrl.hash = '';
+                store.setPolicyUrl(targetTabId, policyUrl.toString());
+              }
             }
             if (domEvidence.storageSignals) {
               store.setStorageSignals(targetTabId, domEvidence.storageSignals);
@@ -134,10 +178,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch {
           // Content script may not be loaded on restricted internal pages
         }
-
-        // Inspect permissions
-        const permSignals = await permissions.inspectPermissionsForOrigin(session.domain);
-        store.setPermissions(targetTabId, permSignals);
 
         // Try syncing with FastAPI backend; if offline, run dynamic local edge evaluation
         let analysis = await store.syncWithBackend(session);

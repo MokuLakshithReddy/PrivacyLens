@@ -32,7 +32,8 @@ export class TabObservationStore {
 
       const session: TabObservationBatch = {
         domain,
-        tabUrl: url,
+        scanSessionId: crypto.randomUUID(),
+        tabUrl: parsed.origin,
         timestamp: Date.now(),
         requests: [],
         storage: [],
@@ -44,7 +45,8 @@ export class TabObservationStore {
     } catch {
       const fallback: TabObservationBatch = {
         domain: 'current-page',
-        tabUrl: url,
+        scanSessionId: crypto.randomUUID(),
+        tabUrl: 'about:blank',
         timestamp: Date.now(),
         requests: [],
         storage: [],
@@ -61,7 +63,7 @@ export class TabObservationStore {
       const exists = session.requests.some(
         (r) => r.targetDomain === signal.targetDomain && r.category === signal.category
       );
-      if (!exists || session.requests.length < 60) {
+      if (session.requests.length < 200) {
         session.requests.push(signal);
       }
     }
@@ -96,6 +98,10 @@ export class TabObservationStore {
     this.tabSessions.delete(tabId);
   }
 
+  clearAll() {
+    this.tabSessions.clear();
+  }
+
   /**
    * Deterministic edge evaluator: Computes real mathematical risk & findings
    * from the tab's actual observable runtime signals when backend is offline.
@@ -126,103 +132,41 @@ export class TabObservationStore {
     const analyticsDomains = thirdParties.filter((p) => p.category === 'analytics').map((p) => p.domain);
     const socialDomains = thirdParties.filter((p) => p.category === 'social').map((p) => p.domain);
 
-    // Compute mathematical risk
-    let risk = 12; // Baseline
-    if (!session.policyUrl) {
-      risk += 18; // Penalty for missing policy disclosure
-    }
-    risk += adDomains.length * 16;
-    risk += analyticsDomains.length * 8;
-    risk += socialDomains.length * 10;
-    risk += Math.min(15, session.storage.length * 3);
-    if (session.permissions.some((p) => p.permission === 'geolocation')) {
-      risk += 14;
-    }
-
-    const clampedRisk = Math.min(100, Math.max(8, risk));
-    let tier: RiskTier = 'Low';
-    if (clampedRisk <= 20) tier = 'Very Low';
-    else if (clampedRisk <= 40) tier = 'Low';
-    else if (clampedRisk <= 60) tier = 'Moderate';
-    else if (clampedRisk <= 80) tier = 'High';
-    else tier = 'Critical';
-
-    const confidence = Math.min(0.96, Math.max(0.50, 0.45 + session.requests.length * 0.04));
-
-    // Dynamic Findings based on ACTUAL signals observed
+    // Explainable local heuristic factors; no policy has been fetched or extracted here.
+    const uniqueThirdPartyDomains = new Set(thirdPartyRequests.map((r) => r.targetDomain));
+    const uniqueAdDomains = new Set(thirdPartyRequests.filter((r) => r.category === 'advertising').map((r) => r.targetDomain));
+    const uniqueAnalyticsDomains = new Set(thirdPartyRequests.filter((r) => r.category === 'analytics').map((r) => r.targetDomain));
+    const riskFactors = {
+      collection: 0,
+      sharing: 0,
+      retention: 75,
+      tracking: Math.min(100, uniqueThirdPartyDomains.size * 12 + uniqueAdDomains.size * 15 + uniqueAnalyticsDomains.size * 8),
+      gap_candidates: 0,
+      transparency: 80
+    };
+    const riskWeights = { collection: 0.15, sharing: 0.20, retention: 0.10, tracking: 0.25, gap_candidates: 0.25, transparency: 0.05 };
+    const riskScore = Math.max(0, Math.min(100, Math.round(Object.entries(riskFactors).reduce((sum, [name, value]) => sum + value * riskWeights[name as keyof typeof riskWeights], 0))));
+    const tier: RiskTier = riskScore <= 20 ? 'Very Low' : riskScore <= 40 ? 'Low' :
+      riskScore <= 60 ? 'Moderate' : riskScore <= 80 ? 'High' : 'Critical';
+    const knownCategories = new Set<RequestCategory>(['analytics', 'advertising', 'social', 'cdn', 'essential', 'telemetry']);
+    const distinctDomains = new Set(session.requests.map((r) => r.targetDomain));
+    const classifiedDomains = new Set(session.requests.filter((r) => knownCategories.has(r.category)).map((r) => r.targetDomain));
+    const evidenceCoverage = Math.round((Math.min(1, session.requests.length / 15) * 0.35 +
+      (distinctDomains.size ? classifiedDomains.size / distinctDomains.size : 0) * 0.25) * 100) / 100;
     const findings: EvidenceFinding[] = [];
-
-    if (adDomains.length > 0) {
-      findings.push({
-        findingId: 'gap_ad_runtime',
-        gapType: 'omission_advertising',
-        severity: 'high',
-        confidence: 0.91,
-        title: 'Undisclosed Third-Party Advertising Endpoints',
-        rationale: `Runtime telemetry captured active network requests to advertising-categorized domain(s): ${adDomains.slice(0, 3).join(', ')}.`,
-        evidence: {
-          policyQuotes: session.policyUrl ? [`Policy page located at ${session.policyUrl}`] : [],
-          observedDomains: adDomains,
-          observedStorageKeys: session.storage.map((s) => s.name).slice(0, 5)
-        }
-      });
-    }
-
-    if (session.permissions.some((p) => p.permission === 'geolocation')) {
-      findings.push({
-        findingId: 'gap_geo_runtime',
-        gapType: 'permission_mismatch',
-        severity: 'medium',
-        confidence: 0.85,
-        title: 'Geolocation Capability Invocation',
-        rationale: `The page queried browser Geolocation capabilities. Ensure specific location disclosures exist in policy.`,
-        evidence: {
-          policyQuotes: [],
-          observedDomains: [domain],
-          observedPermissions: ['geolocation']
-        }
-      });
-    }
-
-    if (socialDomains.length > 0) {
-      findings.push({
-        findingId: 'gap_social_runtime',
-        gapType: 'undisclosed_third_party',
-        severity: 'medium',
-        confidence: 0.86,
-        title: 'Social Graph Tracking Pixels',
-        rationale: `Outbound connections to social tracking endpoints observed (${socialDomains.join(', ')}).`,
-        evidence: {
-          policyQuotes: [],
-          observedDomains: socialDomains
-        }
-      });
-    }
-
-    if (findings.length === 0) {
-      findings.push({
-        findingId: 'finding_clean',
-        gapType: 'broad_language_concern',
-        severity: 'low',
-        confidence: 0.88,
-        title: 'Minimal External Tracking Footprint',
-        rationale: `Zero external advertising or tracker networks observed for this page session.`,
-        evidence: {
-          policyQuotes: session.policyUrl ? [`Identified policy: ${session.policyUrl}`] : [],
-          observedDomains: thirdParties.map((p) => p.domain)
-        }
-      });
-    }
 
     return {
       domain,
       policyUrl: session.policyUrl,
       inspectedAt: new Date().toISOString(),
-      riskScore: clampedRisk,
+      riskScore,
       riskTier: tier,
-      confidence,
-      summary: `Edge evaluation analyzed ${session.requests.length} network requests across ${thirdParties.length} third parties.`,
-      claimsCount: session.policyUrl ? 5 : 0,
+      evidenceCoverage,
+      riskFactors,
+      riskWeights,
+      algorithmVersion: 'risk-v2',
+      summary: `Local heuristic evaluation analyzed ${session.requests.length} observed requests across ${thirdParties.length} external destinations. Findings depend on browser coverage and domain rules; no finding is not a safety or compliance assessment.`,
+      claimsCount: 0,
       observedThirdPartiesCount: thirdParties.length,
       findings,
       dataFlow: {
@@ -235,42 +179,68 @@ export class TabObservationStore {
   async syncWithBackend(batch: TabObservationBatch): Promise<SiteAnalysisResult | null> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-
+      const timeoutId = setTimeout(() => controller.abort(), 60_000);
+      try {
       // Ingest observations
       await fetch(`${BACKEND_BASE_URL}/observations/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           domain: batch.domain,
-          tab_url: batch.tabUrl,
-          requests: batch.requests,
-          storage_keys: batch.storage,
-          permissions: batch.permissions.map((p) => p.permission)
+          scan_session_id: batch.scanSessionId,
+          requests: batch.requests
         }),
         signal: controller.signal
       });
 
-      // Correlate
+      // Find and analyze one public policy through the local API before correlation.
+      let policyUrl = batch.policyUrl;
+      if (!policyUrl) {
+        const discoveryRes = await fetch(`${BACKEND_BASE_URL}/policies/discover`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: `https://${batch.domain}` }),
+          signal: controller.signal
+        });
+        if (discoveryRes.ok) {
+          const discovery = await discoveryRes.json();
+          if (discovery.discovered && typeof discovery.policy_url === 'string') policyUrl = discovery.policy_url;
+        }
+      }
+      if (policyUrl) {
+        const analysisRes = await fetch(`${BACKEND_BASE_URL}/policies/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: batch.domain, policy_url: policyUrl }),
+          signal: controller.signal
+        });
+        if (!analysisRes.ok) throw new Error(`Policy analysis returned ${analysisRes.status}`);
+      }
+
+      // Correlate this policy version with this scan session.
       const correlateRes = await fetch(`${BACKEND_BASE_URL}/correlate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           domain: batch.domain,
-          policy_url: batch.policyUrl
+          scan_session_id: batch.scanSessionId,
+          policy_url: policyUrl ? new URL(policyUrl).origin : undefined
         }),
         signal: controller.signal
       });
-
-      clearTimeout(timeoutId);
 
       if (!correlateRes.ok) {
         throw new Error(`Correlation returned ${correlateRes.status}`);
       }
 
       return (await correlateRes.json()) as SiteAnalysisResult;
+      } catch {
+        // Backend is unavailable or timed out; fall back to local evaluation.
+        return null;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch {
-      // Backend is unavailable or timed out; fall back to Edge evaluation on real signals
       return null;
     }
   }

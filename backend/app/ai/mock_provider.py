@@ -33,11 +33,10 @@ class MockAIProvider(BaseAIProvider):
                     retention_specified=False,
                     section_name=section_name,
                     exact_quote=s[:200],
-                    confidence=0.91
                 ))
 
             # Analytics detection
-            elif any(k in s_lower for k in ['analytics', 'usage data', 'improve our services', 'measure traffic', 'statistical']):
+            elif any(k in s_lower for k in ['analytics', 'usage data', 'usage logs', 'improve our services', 'measure traffic', 'statistical']):
                 claims.append(PolicyClaimSchema(
                     claim_id=f"clm_{uuid.uuid4().hex[:8]}",
                     category="data_collection",
@@ -47,7 +46,6 @@ class MockAIProvider(BaseAIProvider):
                     retention_specified=False,
                     section_name=section_name,
                     exact_quote=s[:200],
-                    confidence=0.88
                 ))
 
             # Location / Geolocation detection
@@ -61,7 +59,6 @@ class MockAIProvider(BaseAIProvider):
                     retention_specified=False,
                     section_name=section_name,
                     exact_quote=s[:200],
-                    confidence=0.86
                 ))
 
             # Retention detection
@@ -76,23 +73,7 @@ class MockAIProvider(BaseAIProvider):
                     retention_period="specified_in_policy",
                     section_name=section_name,
                     exact_quote=s[:200],
-                    confidence=0.85
                 ))
-
-        # Ensure at least one baseline claim if text is substantial
-        if not claims and len(section_text) > 50:
-            sample_sentence = sentences[0] if sentences else section_text[:100]
-            claims.append(PolicyClaimSchema(
-                claim_id=f"clm_{uuid.uuid4().hex[:8]}",
-                category="general_notice",
-                data_type="general",
-                purpose="general_operations",
-                sharing=False,
-                retention_specified=False,
-                section_name=section_name,
-                exact_quote=sample_sentence[:200],
-                confidence=0.75
-            ))
 
         return claims
 

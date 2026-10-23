@@ -5,11 +5,13 @@ import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
 interface ScoreCardProps {
   score: number;
   tier: RiskTier;
-  confidence: number;
+  evidenceCoverage: number;
+  riskFactors: Record<string, number>;
+  riskWeights: Record<string, number>;
   domain: string;
 }
 
-export const ScoreCard: React.FC<ScoreCardProps> = ({ score, tier, confidence, domain }) => {
+export const ScoreCard: React.FC<ScoreCardProps> = ({ score, tier, evidenceCoverage, riskFactors, riskWeights, domain }) => {
   const getTierColor = (t: RiskTier) => {
     switch (t) {
       case 'Very Low':
@@ -47,7 +49,7 @@ export const ScoreCard: React.FC<ScoreCardProps> = ({ score, tier, confidence, d
         <div>
           <span className="text-[11px] font-mono tracking-wider uppercase text-slate-400 flex items-center gap-1.5">
             {getIcon()}
-            Runtime Risk Assessment
+            Heuristic Risk Indicator
           </span>
           <h2 className="text-lg font-bold text-white tracking-tight mt-0.5 max-w-[240px] truncate" title={domain}>
             {domain}
@@ -66,18 +68,27 @@ export const ScoreCard: React.FC<ScoreCardProps> = ({ score, tier, confidence, d
         </div>
 
         <div className="text-right">
-          <div className="text-[11px] text-slate-400 uppercase font-mono">Evidentiary Confidence</div>
+          <div className="text-[11px] text-slate-400 uppercase font-mono">Evidence Input Coverage (Estimate)</div>
           <div className="text-xs font-semibold text-sky-400 font-mono mt-0.5">
-            {(confidence * 100).toFixed(0)}% validated
+            {(evidenceCoverage * 100).toFixed(0)}% input coverage estimate
           </div>
         </div>
       </div>
 
-      {/* Confidence progress indicator */}
+      <div className="mt-3 text-[10px] font-mono uppercase text-slate-500">Score components (factor × weight)</div>
+      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-slate-400">
+        {Object.entries(riskFactors).map(([name, value]) => (
+          <div key={name} className="flex justify-between gap-2">
+            <span>{name.replaceAll('_', ' ')}</span><span className="font-mono text-slate-300">{value} × {riskWeights[name] ?? 0} = {(value * (riskWeights[name] ?? 0)).toFixed(1)}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Estimated input coverage indicator */}
       <div className="w-full bg-slate-850 h-1.5 rounded-full overflow-hidden mt-3 bg-slate-800">
         <div 
           className="h-full bg-gradient-to-r from-blue-500 to-sky-400 rounded-full transition-all duration-500"
-          style={{ width: `${Math.min(100, confidence * 100)}%` }}
+          style={{ width: `${Math.min(100, evidenceCoverage * 100)}%` }}
         />
       </div>
     </div>

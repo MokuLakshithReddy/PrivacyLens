@@ -17,6 +17,7 @@ class ClaimExtractor:
             self.provider = GeminiAIProvider()
         else:
             self.provider = MockAIProvider()
+        self.analysis_method = "gemini" if isinstance(self.provider, GeminiAIProvider) else "local_rules"
 
     async def process_sections(self, sections: List[Dict[str, str]]) -> List[PolicyClaimSchema]:
         all_claims: List[PolicyClaimSchema] = []
@@ -32,7 +33,8 @@ class ClaimExtractor:
                     section_text=text
                 )
                 all_claims.extend(claims)
-            except Exception as e:
-                logger.error(f"Failed extracting claims from section '{title}': {e}")
+            except Exception:
+                # Failed extraction is unknown evidence; do not log policy text or provider details.
+                logger.warning("Claim extraction failed for a policy section")
 
         return all_claims
