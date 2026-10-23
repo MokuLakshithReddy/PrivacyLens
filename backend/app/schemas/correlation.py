@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class FindingEvidenceSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
     policyQuotes: List[str] = Field(default_factory=list, max_length=10)
+    policyLocations: List[dict[str, int]] = Field(default_factory=list, max_length=10)
+    disclosureStatus: str = "insufficient_evidence"
     observedDomains: List[str] = Field(default_factory=list, max_length=100)
     observedEventIds: List[str] = Field(default_factory=list, max_length=100)
     observedStorageCount: Optional[int] = Field(default=None, ge=0)
@@ -60,6 +62,7 @@ class SiteAnalysisResultSchema(BaseModel):
     riskFactors: dict[str, int]
     riskWeights: dict[str, float]
     algorithmVersion: str
+    evaluationMode: str = "backend"
     summary: str
     claimsCount: int
     observedThirdPartiesCount: int

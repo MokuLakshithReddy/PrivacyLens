@@ -44,8 +44,8 @@ PrivacyLens defines four explicit trust zones separated by strict sanitization f
 │                                                                        │
 │   • Target Hostnames (e.g. "analytics.google.com")                     │
 │   • Request Categories (e.g. "advertising", "first-party")             │
-│   • Cookie Key Names Only (e.g. "_ga", "_fbp") + flags                 │
-│   • Permission API Names (e.g. "geolocation")                          │
+│   • Bounded request metadata and destination categories                 │
+│   • Public policy text only after explicit policy-fetch consent          │
 │   • Public Policy Text (Strip scripts, strip hidden tokens)            │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -80,8 +80,8 @@ PrivacyLens enforces an immutable contract on what data is permitted to cross tr
 ### 3.1. Prohibited Data (NEVER leaves Zone 1)
 | Data Category | Handling Rule | Enforcement Mechanism |
 | :--- | :--- | :--- |
-| **Cookie Values** | Strictly Prohibited | Content script and background worker access `cookie.name` only; `cookie.value` is discarded at read time. |
-| **Storage Values** | Strictly Prohibited | `localStorage` and `sessionStorage` inspections retrieve `Object.keys()` and byte lengths; `getItem()` is blocked. |
+| **Cookies** | Strictly Prohibited | Cookie APIs are not read or ingested by the active flow. |
+| **Storage Values and Keys** | Strictly Prohibited | The content script reports bounded local/session storage counts only; it does not enumerate keys or read values. |
 | **Request / Response Bodies** | Strictly Prohibited | Network observer hooks request headers/metadata only. No streaming of payloads or POST bodies. |
 | **Sensitive URL Parameters** | Strictly Prohibited | URLs are stripped to `origin + pathname`; query strings containing tokens (`?token=`, `?email=`, `?id=`) are stripped. |
 | **Form Inputs & Keystrokes** | Strictly Prohibited | Zero listeners on input events, change events, or password fields. |
@@ -90,9 +90,7 @@ PrivacyLens enforces an immutable contract on what data is permitted to cross tr
 - Tab Hostname & Protocol (e.g., `https://example.com`)
 - Target Network Domains (e.g., `doubleclick.net`, `cdn.example.com`)
 - Request Initiator and Direction (First-party vs. Third-party)
-- Cookie / Storage Key Names (e.g., `_ga`, `session_id_hash`)
-- Cookie Lifespan & Security Attributes (`HttpOnly`, `Secure`, `SameSite`)
-- Browser Permission Types (`geolocation`, `notifications`)
+- Bounded local/session storage counts
 - Public Privacy Policy Webpage Text (Scraped from public URL)
 
 ---

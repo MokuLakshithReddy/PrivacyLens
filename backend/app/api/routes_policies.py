@@ -108,7 +108,16 @@ async def analyze_policy(request: PolicyAnalyzeRequest):
                 purpose=row["purpose"], sharing=bool(row["sharing"]), third_party=row["third_party"],
                 retention_specified=bool(row["retention_specified"]), retention_period=row["retention_period"],
                 section_name=row["section_name"], exact_quote=row["exact_quote"],
+                source_start=row["source_start"], source_end=row["source_end"],
             ) for row in await cursor.fetchall()]
+            if request.scan_session_id:
+                updated = await db.execute(
+                    "UPDATE scan_sessions SET policy_id = ? WHERE id = ? AND site_id = ?",
+                    (existing["id"], request.scan_session_id, site_id),
+                )
+                if updated.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Scan session not found for this site")
+                await db.commit()
             return PolicyAnalyzeResponse(
                 policy_id=existing["id"], domain=request.domain,
                 analysis_method=claim_extractor.analysis_method, claims_count=len(existing_claims),
@@ -128,15 +137,26 @@ async def analyze_policy(request: PolicyAnalyzeRequest):
             (policy_id, site_id, safe_source_url, content_hash, clean_text[:50000]),
         )
         for claim in claims:
+            source_start = clean_text.find(claim.exact_quote) if claim.exact_quote else -1
+            source_end = source_start + len(claim.exact_quote) if source_start >= 0 else None
             await db.execute(
                 """INSERT INTO policy_claims (
                     id, policy_id, category, data_type, purpose, sharing, third_party,
-                    retention_specified, retention_period, section_name, exact_quote, confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    retention_specified, retention_period, section_name, exact_quote, confidence,
+                    source_start, source_end
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (claim.claim_id, policy_id, claim.category, claim.data_type, claim.purpose,
                  int(claim.sharing), claim.third_party, int(claim.retention_specified),
-                 claim.retention_period, claim.section_name, claim.exact_quote, 0.0),
+                 claim.retention_period, claim.section_name, claim.exact_quote, 0.0,
+                 source_start if source_start >= 0 else None, source_end),
             )
+        if request.scan_session_id:
+            cursor = await db.execute(
+                "UPDATE scan_sessions SET policy_id = ? WHERE id = ? AND site_id = ?",
+                (policy_id, request.scan_session_id, site_id),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Scan session not found for this site")
         await db.commit()
 
     return PolicyAnalyzeResponse(

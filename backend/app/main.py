@@ -33,7 +33,7 @@ app.add_middleware(
     allow_origins=["http://localhost", "http://127.0.0.1"],
     allow_origin_regex=r"^chrome-extension://[a-p]{32}$",
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
 

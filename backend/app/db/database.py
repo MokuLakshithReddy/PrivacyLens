@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS policy_claims (
     retention_period TEXT,
     section_name TEXT NOT NULL,
     exact_quote TEXT NOT NULL,
+    source_start INTEGER,
+    source_end INTEGER,
     confidence REAL NOT NULL,
     FOREIGN KEY(policy_id) REFERENCES policies(id)
 );
@@ -38,7 +40,9 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     site_id TEXT NOT NULL,
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'collecting',
+    policy_id TEXT,
     FOREIGN KEY(site_id) REFERENCES sites(id)
+    ,FOREIGN KEY(policy_id) REFERENCES policies(id)
 );
 CREATE TABLE IF NOT EXISTS observations (
     id TEXT PRIMARY KEY,
@@ -105,6 +109,9 @@ async def init_db():
         await _ensure_column(db, "observations", "event_id", "TEXT")
         await _ensure_column(db, "findings", "scan_session_id", "TEXT")
         await _ensure_column(db, "findings", "policy_id", "TEXT")
+        await _ensure_column(db, "scan_sessions", "policy_id", "TEXT")
+        await _ensure_column(db, "policy_claims", "source_start", "INTEGER")
+        await _ensure_column(db, "policy_claims", "source_end", "INTEGER")
         await _ensure_column(db, "findings", "rule_version", "TEXT NOT NULL DEFAULT 'v1'")
         await _ensure_column(db, "risk_snapshots", "scan_session_id", "TEXT")
         await _ensure_column(db, "risk_snapshots", "evidence_coverage", "REAL NOT NULL DEFAULT 0")
@@ -114,6 +121,24 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_observations_scan_time ON observations(scan_session_id, timestamp)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_policy_site_time ON policies(site_id, retrieved_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_risk_site_time ON risk_snapshots(site_id, timestamp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_scan_site_time ON scan_sessions(site_id, started_at)")
+        if settings.retention_days > 0:
+            stale = await db.execute(
+                "SELECT id FROM sites WHERE last_seen < datetime('now', ?)",
+                (f"-{settings.retention_days} days",),
+            )
+            for row in await stale.fetchall():
+                site_id = row[0]
+                await db.execute("DELETE FROM observations WHERE site_id = ?", (site_id,))
+                await db.execute("DELETE FROM findings WHERE site_id = ?", (site_id,))
+                await db.execute("DELETE FROM risk_snapshots WHERE site_id = ?", (site_id,))
+                await db.execute("DELETE FROM scan_sessions WHERE site_id = ?", (site_id,))
+                await db.execute(
+                    "DELETE FROM policy_claims WHERE policy_id IN (SELECT id FROM policies WHERE site_id = ?)",
+                    (site_id,),
+                )
+                await db.execute("DELETE FROM policies WHERE site_id = ?", (site_id,))
+                await db.execute("DELETE FROM sites WHERE id = ?", (site_id,))
         await db.commit()
 
 

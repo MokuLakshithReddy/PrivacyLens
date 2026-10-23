@@ -18,6 +18,8 @@ class PolicyClaimSchema(StrictSchema):
     retention_period: Optional[str] = Field(default=None, max_length=200)
     section_name: str = Field(max_length=200)
     exact_quote: str = Field(max_length=5000)
+    source_start: Optional[int] = Field(default=None, ge=0)
+    source_end: Optional[int] = Field(default=None, ge=0)
 
 
 class PolicyDiscoverRequest(StrictSchema):
@@ -34,6 +36,7 @@ class PolicyAnalyzeRequest(StrictSchema):
     domain: str = Field(min_length=1, max_length=253)
     policy_url: str = Field(min_length=8, max_length=2048)
     policy_html: Optional[str] = Field(default=None, max_length=1_000_000)
+    scan_session_id: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,80}$")
 
     @field_validator("domain")
     @classmethod

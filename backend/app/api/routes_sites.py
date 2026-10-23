@@ -35,20 +35,39 @@ async def correlate_site(request: CorrelateRequest):
     async with database_connection() as db:
         db.row_factory = aiosqlite.Row
 
-        # A scan can only use the newest policy version available for this site.
+        # A scan is bound to the policy selected during that scan.
         cursor = await db.execute(
-            "SELECT id FROM scan_sessions WHERE id = ? AND site_id = ?",
+            """SELECT scan_sessions.policy_id, policies.url AS policy_url
+               FROM scan_sessions
+               LEFT JOIN policies ON policies.id = scan_sessions.policy_id
+               WHERE scan_sessions.id = ? AND scan_sessions.site_id = ?""",
             (request.scan_session_id, site_id),
         )
-        if await cursor.fetchone() is None:
+        scan_row = await cursor.fetchone()
+        if scan_row is None:
             raise HTTPException(status_code=404, detail="Scan session not found for this site")
-
-        cursor = await db.execute(
-            "SELECT id FROM policies WHERE site_id = ? ORDER BY retrieved_at DESC LIMIT 1",
-            (site_id,),
-        )
-        policy_row = await cursor.fetchone()
-        policy_id = policy_row["id"] if policy_row else None
+        policy_id = scan_row["policy_id"] if scan_row else None
+        selected_policy_url = scan_row["policy_url"] if scan_row else None
+        if policy_id is None:
+            if request.policy_url:
+                cursor = await db.execute(
+                    "SELECT id, url FROM policies WHERE site_id = ? AND url = ?",
+                    (site_id, request.policy_url.split("?", 1)[0].split("#", 1)[0]),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT id, url FROM policies WHERE site_id = ? ORDER BY retrieved_at ASC, id ASC LIMIT 2",
+                    (site_id,),
+                )
+            candidates = await cursor.fetchall()
+            if len(candidates) == 1:
+                policy_id = candidates[0]["id"]
+                selected_policy_url = candidates[0]["url"]
+                await db.execute(
+                    "UPDATE scan_sessions SET policy_id = ? WHERE id = ? AND site_id = ?",
+                    (policy_id, request.scan_session_id, site_id),
+                )
+                await db.commit()
 
         # 1. Fetch claims for this exact policy version.
         cursor = await db.execute(
@@ -68,6 +87,8 @@ async def correlate_site(request: CorrelateRequest):
                 retention_period=r["retention_period"],
                 section_name=r["section_name"],
                 exact_quote=r["exact_quote"],
+                source_start=r["source_start"],
+                source_end=r["source_end"],
             )
             for r in claims_rows
         ]
@@ -110,7 +131,7 @@ async def correlate_site(request: CorrelateRequest):
             requests=requests,
             storage_keys=[],
             findings=findings,
-            policy_found=len(claims) > 0
+            policy_found=policy_id is not None
         )
 
         # 5. Persist Findings & Risk Snapshot
@@ -145,8 +166,10 @@ async def correlate_site(request: CorrelateRequest):
                         "category": req.category,
                         "count": 0,
                         "disclosed": any(
-                            req.targetDomain in c.exact_quote.lower() or 
-                            (c.third_party and c.third_party in req.targetDomain) 
+                            c.third_party and (
+                                c.third_party.lower() in req.targetDomain.lower()
+                                or req.targetDomain.lower() in c.third_party.lower()
+                            )
                             for c in claims
                         )
                     }
@@ -164,7 +187,7 @@ async def correlate_site(request: CorrelateRequest):
 
         # 7. Check Temporal History (Snapshot Diff)
         cursor = await db.execute(
-            "SELECT score FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC LIMIT 2",
+            "SELECT score FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC, id DESC LIMIT 2",
             (site_id,)
         )
         prev_snaps = await cursor.fetchall()
@@ -178,7 +201,7 @@ async def correlate_site(request: CorrelateRequest):
 
     return SiteAnalysisResultSchema(
         domain=domain,
-        policyUrl=(request.policy_url.split("?", 1)[0].split("#", 1)[0] if request.policy_url else None),
+        policyUrl=selected_policy_url or (request.policy_url.split("?", 1)[0].split("#", 1)[0] if request.policy_url else None),
         inspectedAt=datetime.now(timezone.utc).isoformat(),
         riskScore=risk_score,
         riskTier=risk_tier,
@@ -186,6 +209,7 @@ async def correlate_site(request: CorrelateRequest):
         riskFactors=risk_factors,
         riskWeights=RiskEngine.WEIGHTS,
         algorithmVersion="risk-v2",
+        evaluationMode="backend",
         summary=(f"Heuristic risk indicators were calculated from {len(claims)} policy claims and "
                  f"{len(requests)} observations in this scan. No finding is not a safety or compliance assessment."),
         claimsCount=len(claims),
@@ -218,3 +242,25 @@ async def get_site_temporal_diff(domain: str):
             "domain": domain,
             "snapshots": [dict(r) for r in rows]
         }
+
+
+@router.delete("/sites/{domain}")
+async def delete_site_data(domain: str):
+    """Delete all locally stored records associated with one normalized site."""
+    site_id = site_id_for_domain(domain)
+    async with database_connection() as db:
+        cursor = await db.execute("SELECT id FROM sites WHERE id = ?", (site_id,))
+        if await cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="No stored data for site")
+        await db.execute("DELETE FROM observations WHERE site_id = ?", (site_id,))
+        await db.execute("DELETE FROM findings WHERE site_id = ?", (site_id,))
+        await db.execute("DELETE FROM risk_snapshots WHERE site_id = ?", (site_id,))
+        await db.execute("DELETE FROM scan_sessions WHERE site_id = ?", (site_id,))
+        await db.execute(
+            "DELETE FROM policy_claims WHERE policy_id IN (SELECT id FROM policies WHERE site_id = ?)",
+            (site_id,),
+        )
+        await db.execute("DELETE FROM policies WHERE site_id = ?", (site_id,))
+        await db.execute("DELETE FROM sites WHERE id = ?", (site_id,))
+        await db.commit()
+    return {"status": "deleted", "domain": domain}

@@ -26,25 +26,44 @@ class CorrelationEngine:
             request.targetDomain for request in requests
             if request.category == "advertising" and request.isThirdParty
         })
-        disclosed = any(
-            claim.purpose.lower() == "advertising"
-            or "advertis" in claim.exact_quote.lower()
-            or "marketing partner" in claim.exact_quote.lower()
-            for claim in claims
-        )
-        if not ad_domains or disclosed:
+        if not ad_domains:
             return []
 
-        quotes = [claim.exact_quote for claim in claims[:2] if claim.exact_quote]
+        relevant_claims = [
+            claim for claim in claims
+            if any(term in " ".join((claim.category, claim.purpose, claim.data_type, claim.exact_quote)).lower()
+                   for term in ("advertis", "marketing", "targeted", "promotion"))
+        ]
+        named_matches = {
+            domain for domain in ad_domains
+            if any(
+                claim.third_party and (
+                    claim.third_party.lower() in domain.lower()
+                    or domain.lower() in claim.third_party.lower()
+                )
+                for claim in relevant_claims
+            )
+        }
+        if named_matches == set(ad_domains):
+            return []
+
+        unmatched_domains = [domain for domain in ad_domains if domain not in named_matches]
+        quotes = [claim.exact_quote for claim in relevant_claims if claim.exact_quote][:2]
+        locations = [
+            {"start": claim.source_start, "end": claim.source_end}
+            for claim in relevant_claims[:2]
+            if claim.source_start is not None and claim.source_end is not None
+        ]
+        disclosure_status = "ambiguous_disclosure" if relevant_claims else "potential_disclosure_gap"
         rationale = (
             "Browser telemetry observed requests to domains classified by the current rule set as "
-            f"advertising related ({', '.join(ad_domains[:5])}). The extracted claims from the captured "
-            "policy did not contain an explicit advertising disclosure. This is a potential disclosure "
+            f"advertising related ({', '.join(unmatched_domains[:5])}). The relevant extracted claims "
+            "did not name every observed destination. This is a candidate disclosure "
             "gap under heuristic rules; it does not establish what data was transmitted or a legal violation."
         )
         event_ids = sorted({
             request.requestId for request in requests
-            if request.targetDomain in ad_domains and request.requestId
+            if request.targetDomain in unmatched_domains and request.requestId
         })[:100]
         return [EvidenceFindingSchema(
             findingId=f"gap_ad_{uuid.uuid4().hex}",
@@ -56,5 +75,11 @@ class CorrelationEngine:
             severity="high",
             title="Potential advertising disclosure gap",
             rationale=rationale,
-            evidence=FindingEvidenceSchema(policyQuotes=quotes, observedDomains=ad_domains, observedEventIds=event_ids),
+            evidence=FindingEvidenceSchema(
+                policyQuotes=quotes,
+                policyLocations=locations,
+                disclosureStatus=disclosure_status,
+                observedDomains=unmatched_domains,
+                observedEventIds=event_ids,
+            ),
         )]

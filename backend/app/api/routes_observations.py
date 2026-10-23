@@ -1,7 +1,7 @@
 import time
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app.config import settings
 from app.db.database import database_connection
 from app.core.domain_identity import site_id_for_domain
@@ -23,6 +23,10 @@ async def ingest_observations(request: ObservationIngestRequest):
     async with database_connection() as db:
         await db.execute("INSERT OR IGNORE INTO sites (id, domain) VALUES (?, ?)", (site_id, domain))
         await db.execute("UPDATE sites SET last_seen = CURRENT_TIMESTAMP WHERE id = ?", (site_id,))
+        cursor = await db.execute("SELECT site_id FROM scan_sessions WHERE id = ?", (request.scan_session_id,))
+        existing_session = await cursor.fetchone()
+        if existing_session and existing_session[0] != site_id:
+            raise HTTPException(status_code=409, detail="Scan session ID is already associated with another site")
         await db.execute(
             "INSERT OR IGNORE INTO scan_sessions (id, site_id) VALUES (?, ?)",
             (request.scan_session_id, site_id),

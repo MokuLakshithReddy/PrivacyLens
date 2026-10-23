@@ -17,6 +17,7 @@ class Settings:
     debug = os.getenv("PRIVACYLENS_DEBUG", "false").strip().lower() in {"1", "true", "yes"}
     sqlite_db_path = os.getenv("PRIVACYLENS_DB_PATH", str(DATA_DIR / "privacylens.db"))
     max_request_bytes = 1_048_576
+    retention_days = int(os.getenv("PRIVACYLENS_RETENTION_DAYS", "90"))
 
     def validate_deployment(self) -> None:
         if self.default_ai_provider not in {"mock", "gemini"}:

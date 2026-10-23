@@ -15,6 +15,9 @@ export type RequestCategory =
 export type RiskTier = 'Very Low' | 'Low' | 'Moderate' | 'High' | 'Critical';
 
 export type GapType =
+  | 'potential_disclosure_gap'
+  | 'ambiguous_disclosure'
+  | 'insufficient_evidence'
   | 'omission_advertising'
   | 'omission_analytics'
   | 'broad_language_concern'
@@ -84,6 +87,8 @@ export interface EvidenceFinding {
   rationale: string;
   evidence: {
     policyQuotes: string[];
+    policyLocations?: { start: number; end: number }[];
+    disclosureStatus?: 'potential_disclosure_gap' | 'ambiguous_disclosure' | 'insufficient_evidence';
     observedDomains: string[];
     observedEventIds: string[];
     observedStorageCount?: number;
@@ -101,6 +106,7 @@ export interface SiteAnalysisResult {
   riskFactors: Record<string, number>;
   riskWeights: Record<string, number>;
   algorithmVersion: string;
+  evaluationMode: 'backend' | 'edge';
   summary: string;
   claimsCount: number;
   observedThirdPartiesCount: number;
