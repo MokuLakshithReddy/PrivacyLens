@@ -16,6 +16,7 @@ export const App: React.FC = () => {
   const [evalMode, setEvalMode] = useState<'backend' | 'edge'>('edge');
   const [isSystemPage, setIsSystemPage] = useState<boolean>(false);
   const [monitoringEnabled, setMonitoringEnabled] = useState<boolean>(false);
+  const [policyFetchConsent, setPolicyFetchConsent] = useState<boolean>(false);
   const [systemPageUrl, setSystemPageUrl] = useState<string>('');
 
   const runAnalysis = async () => {
@@ -24,8 +25,9 @@ export const App: React.FC = () => {
 
     try {
       if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        const state = await chrome.storage.local.get({ monitoringEnabled: false });
+        const state = await chrome.storage.local.get({ monitoringEnabled: false, policyFetchConsent: false });
         const enabled = state.monitoringEnabled === true;
+        setPolicyFetchConsent(state.policyFetchConsent === true);
         setMonitoringEnabled(enabled);
         if (!enabled) {
           setAnalysis(null);
@@ -60,7 +62,7 @@ export const App: React.FC = () => {
             (response) => {
               if (response && response.analysis) {
                 setAnalysis(response.analysis);
-                setEvalMode(response.analysis.summary.includes('Local heuristic evaluation') ? 'edge' : 'backend');
+                setEvalMode(response.analysis.evaluationMode);
               } else {
                 setAnalysis(null);
               }
@@ -89,6 +91,13 @@ export const App: React.FC = () => {
       setAnalysis(null);
       setLoading(false);
     }
+  };
+
+  const togglePolicyFetchConsent = async () => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+    const next = !policyFetchConsent;
+    await chrome.storage.local.set({ policyFetchConsent: next });
+    setPolicyFetchConsent(next);
   };
 
   const exportAuditReport = () => {
@@ -148,6 +157,17 @@ ${analysis.dataFlow.thirdParties
     URL.revokeObjectURL(url);
   };
 
+  const deleteStoredData = async () => {
+    if (!currentDomain || !window.confirm(`Delete all stored PrivacyLens data for ${currentDomain}? This cannot be undone.`)) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/api/v1/sites/${encodeURIComponent(currentDomain)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`Deletion failed (${response.status})`);
+      setAnalysis(null);
+    } catch {
+      window.alert('PrivacyLens could not delete the stored site data. The local API may be unavailable.');
+    }
+  };
+
   useEffect(() => {
     runAnalysis();
   }, []);
@@ -185,12 +205,26 @@ ${analysis.dataFlow.thirdParties
             {monitoringEnabled ? 'Pause' : 'Enable'}
           </button>
           <button
+            onClick={togglePolicyFetchConsent}
+            className={`px-2 py-1 rounded border text-[10px] font-mono ${policyFetchConsent ? 'border-blue-500/40 text-blue-300 bg-blue-500/10' : 'border-slate-600 text-slate-300 bg-slate-800/50'}`}
+            title="Allow fetching and local storage of public policy text"
+          >
+            Policy {policyFetchConsent ? 'On' : 'Off'}
+          </button>
+          <button
           onClick={runAnalysis}
           disabled={loading || !monitoringEnabled}
           className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           title="Refresh runtime signals"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-blue-400' : ''}`} />
+          </button>
+          <button
+            onClick={deleteStoredData}
+            className="px-2 py-1 rounded border border-rose-500/40 text-rose-300 bg-rose-500/10 text-[10px] font-mono"
+            title="Delete stored data for this site"
+          >
+            Delete data
           </button>
         </div>
       </header>
@@ -207,7 +241,7 @@ ${analysis.dataFlow.thirdParties
         <div className="flex-1 flex flex-col justify-center rounded-2xl p-5 space-y-3 my-auto border border-slate-700 bg-slate-900/70">
           <h2 className="text-sm font-semibold text-white">Monitoring is paused</h2>
           <p className="text-xs text-slate-300 leading-relaxed">Enable monitoring to collect the current page’s destination origins, request methods and times, plus counts of local and session storage items. PrivacyLens does not read storage keys, storage values, cookies, or request bodies.</p>
-          <p className="text-[11px] text-slate-400">When enabled, network observations and a public privacy policy, if found, may be sent to the local API at 127.0.0.1. The API stores scan records and cleaned policy text on this device. It uses local rules by default; if its operator explicitly configures Gemini, policy text is sent to Google. Pause clears the active in-memory scan; it does not delete API records.</p>
+          <p className="text-[11px] text-slate-400">Monitoring and policy fetching are separate choices. If enabled, a public policy page may be fetched and its cleaned text and extracted claims stored locally. If Gemini is explicitly configured, policy text is sent to Google. Pausing monitoring does not delete stored data; use the site delete control when available.</p>
           <button onClick={toggleMonitoring} className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">Enable local monitoring</button>
         </div>
       ) : isSystemPage ? (

@@ -4,6 +4,7 @@
  */
 
 import { NetworkSignal, RequestCategory } from '@shared/types';
+import { parse } from 'psl';
 
 // Host-suffix rules only. Matching is performed on parsed hostnames, never URL text.
 const CATEGORY_SUFFIXES: Record<Exclude<RequestCategory, 'unknown'>, string[]> = {
@@ -14,12 +15,6 @@ const CATEGORY_SUFFIXES: Record<Exclude<RequestCategory, 'unknown'>, string[]> =
   essential: [],
   telemetry: ['sentry.io', 'bugsnag.com', 'datadoghq.com', 'newrelic.com', 'rollbar.com']
 };
-
-const MULTI_LABEL_SUFFIXES = new Set([
-  'ac.uk', 'co.uk', 'gov.uk', 'org.uk', 'com.au', 'net.au', 'org.au', 'co.nz',
-  'co.jp', 'com.br', 'com.cn', 'co.in', 'co.za', 'com.sg', 'com.hk', 'com.mx',
-  'com.tr', 'co.kr', 'github.io'
-]);
 
 function normalizeHost(host: string): string {
   return host.toLowerCase().replace(/\.$/, '');
@@ -33,11 +28,7 @@ function hasHostSuffix(host: string, suffix: string): boolean {
 export function getRegistrableDomain(host: string): string {
   const normalized = normalizeHost(host);
   if (!normalized || /^\[?[^.]+:\d*\]?$/.test(normalized) || /^\d+(?:\.\d+){3}$/.test(normalized)) return normalized;
-  const parts = normalized.split('.');
-  if (parts.length <= 2) return normalized;
-  const lastTwo = parts.slice(-2).join('.');
-  const suffixLength = MULTI_LABEL_SUFFIXES.has(lastTwo) ? 2 : 1;
-  return parts.slice(-(suffixLength + 1)).join('.');
+  return parse(normalized).domain || normalized;
 }
 
 export function classifyDomain(targetDomain: string): RequestCategory {

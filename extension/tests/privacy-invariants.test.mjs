@@ -24,3 +24,15 @@ test("backend sync does not transmit storage metadata", async () => {
   assert.match(router, /scan_session_id:\s*batch\.scanSessionId/);
   assert.doesNotMatch(router, /storage_keys:\s*batch\.storage/);
 });
+
+test("domain classification uses the maintained public suffix list", async () => {
+  const observer = await source("../src/background/network/traffic-observer.ts");
+  assert.match(observer, /from 'psl'/);
+  assert.doesNotMatch(observer, /MULTI_LABEL_SUFFIXES/);
+});
+
+test("request deduplication is event-id based", async () => {
+  const router = await source("../src/background/messaging/message-router.ts");
+  assert.match(router, /r\.requestId === signal\.requestId/);
+  assert.doesNotMatch(router, /r\.targetDomain === signal\.targetDomain && r\.category === signal\.category/);
+});

@@ -60,9 +60,9 @@ export class TabObservationStore {
   addRequest(tabId: number, signal: NetworkSignal) {
     const session = this.tabSessions.get(tabId);
     if (session) {
-      const exists = session.requests.some(
-        (r) => r.targetDomain === signal.targetDomain && r.category === signal.category
-      );
+      const duplicateEvent = signal.requestId !== undefined &&
+        session.requests.some((r) => r.requestId === signal.requestId);
+      if (duplicateEvent) return;
       if (session.requests.length < 200) {
         session.requests.push(signal);
       }
@@ -128,10 +128,6 @@ export class TabObservationStore {
       disclosedInPolicy: false
     }));
 
-    const adDomains = thirdParties.filter((p) => p.category === 'advertising').map((p) => p.domain);
-    const analyticsDomains = thirdParties.filter((p) => p.category === 'analytics').map((p) => p.domain);
-    const socialDomains = thirdParties.filter((p) => p.category === 'social').map((p) => p.domain);
-
     // Explainable local heuristic factors; no policy has been fetched or extracted here.
     const uniqueThirdPartyDomains = new Set(thirdPartyRequests.map((r) => r.targetDomain));
     const uniqueAdDomains = new Set(thirdPartyRequests.filter((r) => r.category === 'advertising').map((r) => r.targetDomain));
@@ -165,6 +161,7 @@ export class TabObservationStore {
       riskFactors,
       riskWeights,
       algorithmVersion: 'risk-v2',
+      evaluationMode: 'edge',
       summary: `Local heuristic evaluation analyzed ${session.requests.length} observed requests across ${thirdParties.length} external destinations. Findings depend on browser coverage and domain rules; no finding is not a safety or compliance assessment.`,
       claimsCount: 0,
       observedThirdPartiesCount: thirdParties.length,
@@ -193,9 +190,11 @@ export class TabObservationStore {
         signal: controller.signal
       });
 
-      // Find and analyze one public policy through the local API before correlation.
+      const consent = await chrome.storage.local.get({ policyFetchConsent: false });
+      const policyFetchAllowed = consent.policyFetchConsent === true;
+      // Policy discovery and retrieval are separate from network monitoring consent.
       let policyUrl = batch.policyUrl;
-      if (!policyUrl) {
+      if (policyFetchAllowed && !policyUrl) {
         const discoveryRes = await fetch(`${BACKEND_BASE_URL}/policies/discover`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -207,11 +206,15 @@ export class TabObservationStore {
           if (discovery.discovered && typeof discovery.policy_url === 'string') policyUrl = discovery.policy_url;
         }
       }
-      if (policyUrl) {
+      if (policyFetchAllowed && policyUrl) {
         const analysisRes = await fetch(`${BACKEND_BASE_URL}/policies/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain: batch.domain, policy_url: policyUrl }),
+          body: JSON.stringify({
+            domain: batch.domain,
+            policy_url: policyUrl,
+            scan_session_id: batch.scanSessionId
+          }),
           signal: controller.signal
         });
         if (!analysisRes.ok) throw new Error(`Policy analysis returned ${analysisRes.status}`);
