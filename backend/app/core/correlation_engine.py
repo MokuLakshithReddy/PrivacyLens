@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.ai.base import BaseAIProvider
 from app.schemas.policy import PolicyClaimSchema
 from app.schemas.observation import NetworkSignalSchema, StorageSignalSchema
@@ -19,7 +19,9 @@ class CorrelationEngine:
     ) -> List[EvidenceFindingSchema]:
         findings: List[EvidenceFindingSchema] = []
 
+        # -------------------------------------------------------------------
         # 1. Inspect Advertising Network Discrepancies
+        # -------------------------------------------------------------------
         ad_requests = [r for r in requests if r.category == "advertising" and r.isThirdParty]
         ad_domains = list(set([r.targetDomain for r in ad_requests]))
         
@@ -48,33 +50,88 @@ class CorrelationEngine:
                 )
             ))
 
-        # 2. Inspect Permission Discrepancies (e.g. Geolocation)
-        if "geolocation" in permissions:
-            has_location_disclosure = any(
-                "location" in c.data_type.lower() or "location" in c.exact_quote.lower()
-                for c in claims
-            )
-            if not has_location_disclosure:
-                rationale = await self.ai_provider.generate_finding_rationale(
-                    gap_type="permission_mismatch",
-                    policy_quotes=[],
-                    observed_signals=[{"permission": "geolocation", "domain": domain}]
-                )
-                findings.append(EvidenceFindingSchema(
-                    findingId=f"gap_geo_{uuid.uuid4().hex[:6]}",
-                    gapType="permission_mismatch",
-                    severity="medium",
-                    confidence=0.84,
-                    title="Location Capability Query Without Specific Disclosure",
-                    rationale=rationale,
-                    evidence=FindingEvidenceSchema(
-                        policyQuotes=[],
-                        observedDomains=[domain],
-                        observedPermissions=["geolocation"]
-                    )
-                ))
+        # -------------------------------------------------------------------
+        # 2. Comprehensive Permission-Query Correlation (Camera, Mic, Geo, Notifications)
+        # -------------------------------------------------------------------
+        perm_checks = [
+            ("geolocation", ["location", "gps", "geographic", "precise location"], "Location Capability Query Without Specific Disclosure", "medium"),
+            ("camera", ["camera", "video", "facial", "visual data", "image"], "Camera Capability Query Without Media Collection Disclosure", "high"),
+            ("microphone", ["microphone", "audio", "voice", "sound recording"], "Microphone Capability Query Without Audio Collection Disclosure", "high"),
+            ("notifications", ["notification", "push", "marketing messages", "direct marketing"], "Notification Capability Query Without Direct Communication Disclosure", "low"),
+        ]
 
-        # 3. Inspect Broad Language vs Ecosystem Density
+        for perm_name, keywords, title, severity in perm_checks:
+            if perm_name in permissions:
+                has_disclosure = any(
+                    any(kw in c.data_type.lower() or kw in c.exact_quote.lower() for kw in keywords)
+                    for c in claims
+                )
+                if not has_disclosure:
+                    rationale = await self.ai_provider.generate_finding_rationale(
+                        gap_type="permission_mismatch",
+                        policy_quotes=[],
+                        observed_signals=[{"permission": perm_name, "domain": domain}]
+                    )
+                    findings.append(EvidenceFindingSchema(
+                        findingId=f"gap_perm_{perm_name[:3]}_{uuid.uuid4().hex[:4]}",
+                        gapType="permission_mismatch",
+                        severity=severity,
+                        confidence=0.86,
+                        title=title,
+                        rationale=rationale,
+                        evidence=FindingEvidenceSchema(
+                            policyQuotes=[],
+                            observedDomains=[domain],
+                            observedPermissions=[perm_name]
+                        )
+                    ))
+
+        # -------------------------------------------------------------------
+        # 3. Storage & Cookie Persistence Analysis
+        # -------------------------------------------------------------------
+        persistent_storage = [s for s in storage_keys if s.persistent]
+        third_party_storage = [s for s in storage_keys if s.isThirdParty]
+        has_retention_specified = any(c.retention_specified for c in claims)
+
+        # 3a. Persistent storage without retention limits
+        if persistent_storage and not has_retention_specified:
+            findings.append(EvidenceFindingSchema(
+                findingId=f"gap_ret_{uuid.uuid4().hex[:6]}",
+                gapType="excessive_persistence",
+                severity="low",
+                confidence=0.78,
+                title="Persistent Browser State Without Explicit Retention Limits",
+                rationale="Persistent storage identifiers detected, but no explicit data retention duration or expiration policy was identified in the published terms.",
+                evidence=FindingEvidenceSchema(
+                    policyQuotes=[],
+                    observedDomains=[domain],
+                    observedStorageKeys=[s.name for s in persistent_storage[:5]]
+                )
+            ))
+
+        # 3b. Long-lived / permanent storage when policy declares "session only"
+        claims_session_only = any(
+            "session" in c.exact_quote.lower() and not any("persistent" in c2.exact_quote.lower() for c2 in claims)
+            for c in claims if "cookie" in c.category.lower() or "cookie" in c.data_type.lower()
+        )
+        if claims_session_only and persistent_storage:
+            findings.append(EvidenceFindingSchema(
+                findingId=f"gap_cookie_persist_{uuid.uuid4().hex[:6]}",
+                gapType="excessive_persistence",
+                severity="medium",
+                confidence=0.85,
+                title="Divergence in Declared Cookie Lifespan",
+                rationale="Published terms declare reliance on session cookies, but persistent client-side storage keys remain across browser sessions.",
+                evidence=FindingEvidenceSchema(
+                    policyQuotes=[c.exact_quote for c in claims if "session" in c.exact_quote.lower()][:1],
+                    observedDomains=[domain],
+                    observedStorageKeys=[s.name for s in persistent_storage[:5]]
+                )
+            ))
+
+        # -------------------------------------------------------------------
+        # 4. Inspect Broad Language vs Ecosystem Density
+        # -------------------------------------------------------------------
         third_party_domains = list(set([r.targetDomain for r in requests if r.isThirdParty]))
         generic_claims = [
             c for c in claims 
@@ -97,24 +154,6 @@ class CorrelationEngine:
                 evidence=FindingEvidenceSchema(
                     policyQuotes=[generic_claims[0].exact_quote],
                     observedDomains=third_party_domains[:5]
-                )
-            ))
-
-        # 4. Retention & Deletion Disclosure
-        has_retention = any(c.retention_specified for c in claims)
-        persistent_storage = [s for s in storage_keys if s.persistent]
-        if persistent_storage and not has_retention:
-            findings.append(EvidenceFindingSchema(
-                findingId=f"gap_ret_{uuid.uuid4().hex[:6]}",
-                gapType="excessive_persistence",
-                severity="low",
-                confidence=0.76,
-                title="Persistent Browser State Without Explicit Retention Limits",
-                rationale="Persistent storage identifiers detected, but no explicit data retention duration or expiration policy was identified in the published terms.",
-                evidence=FindingEvidenceSchema(
-                    policyQuotes=[],
-                    observedDomains=[domain],
-                    observedStorageKeys=[s.name for s in persistent_storage[:5]]
                 )
             ))
 

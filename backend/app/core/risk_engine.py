@@ -28,11 +28,7 @@ class RiskEngine:
 
         # --- 2. S_sharing (0 - 100, weight 0.20) ---
         sharing_claims = [c for c in claims if c.sharing or c.purpose == "advertising"]
-        s_sharing = min(100, len(sharing_claims) * 30)
-
-        # --- 3. S_retention (0 - 100, weight 0.10) ---
-        has_retention_limit = any(c.retention_specified for c in claims)
-        s_retention = 20 if has_retention_limit else 75
+        s_sharing_declared = min(100, len(sharing_claims) * 30)
 
         # --- 4. S_observed_tracking (0 - 100, weight 0.25) ---
         third_parties = [r for r in requests if r.isThirdParty]
@@ -42,13 +38,22 @@ class RiskEngine:
 
         s_tracking = min(100, (unique_tp_domains * 12) + (ad_count * 15) + (analytics_count * 8))
 
+        # Covert sharing penalty: If advertising/tracking networks are observed at runtime
+        # but the policy concealed or omitted sharing disclosures, assign observed sharing risk.
+        s_sharing_observed = min(100, ad_count * 25)
+        s_sharing = max(s_sharing_declared, s_sharing_observed)
+
+        # --- 3. S_retention (0 - 100, weight 0.10) ---
+        has_retention_limit = any(c.retention_specified for c in claims)
+        s_retention = 20 if has_retention_limit else 75
+
         # --- 5. S_policy_gap (0 - 100, weight 0.25) ---
         gap_penalty = 0
         for f in findings:
-            if f.severity == "critical": gap_penalty += 40
-            elif f.severity == "high": gap_penalty += 30
-            elif f.severity == "medium": gap_penalty += 18
-            else: gap_penalty += 8
+            if f.severity == "critical": gap_penalty += 45
+            elif f.severity == "high": gap_penalty += 35
+            elif f.severity == "medium": gap_penalty += 20
+            else: gap_penalty += 10
         s_gap = min(100, gap_penalty)
 
         # --- 6. S_transparency (0 - 100, weight 0.05) ---

@@ -12,7 +12,7 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'matrix' | 'graph' | 'timeline'>('overview');
   const [analysis, setAnalysis] = useState<SiteAnalysisResult | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<EvidenceFinding | null>(null);
-  const [currentDomain, setCurrentDomain] = useState<string>('example.com');
+  const [currentDomain, setCurrentDomain] = useState<string>('');
   const [evalMode, setEvalMode] = useState<'backend' | 'edge'>('edge');
   const [isSystemPage, setIsSystemPage] = useState<boolean>(false);
   const [systemPageUrl, setSystemPageUrl] = useState<string>('');
@@ -23,33 +23,61 @@ export const App: React.FC = () => {
 
     try {
       if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        // Query active tab across current and last focused windows
+        let tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tabs || tabs.length === 0 || !tabs[0]?.url) {
+          tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        }
+
+        const tab = tabs && tabs[0];
         if (tab && tab.id) {
           const tabUrl = tab.url || '';
 
-          // Check if user is on an internal browser page (edge://, chrome://, about:)
+          // Check if user is on an internal browser page (edge://, chrome://, about:, ntp.msn.com)
           const isInternal = !tabUrl || 
             tabUrl.startsWith('edge://') || 
             tabUrl.startsWith('chrome://') || 
             tabUrl.startsWith('chrome-extension://') || 
-            tabUrl.startsWith('about:');
+            tabUrl.startsWith('ms-browser-extension://') || 
+            tabUrl.startsWith('about:') ||
+            tabUrl.startsWith('view-source:') ||
+            tabUrl.startsWith('devtools://') ||
+            tabUrl.includes('ntp.msn.com');
 
           if (isInternal) {
             setIsSystemPage(true);
-            setSystemPageUrl(tabUrl || 'New Tab Page');
+            setSystemPageUrl(
+              tabUrl.includes('ntp.msn.com') 
+                ? 'Microsoft Edge Start / New Tab Page'
+                : (tabUrl || 'New Tab Page')
+            );
+            setCurrentDomain('Browser System Page');
             setLoading(false);
             return;
           }
 
-          const parsed = new URL(tabUrl);
+          let parsed: URL;
+          try {
+            parsed = new URL(tabUrl);
+          } catch {
+            setIsSystemPage(true);
+            setSystemPageUrl(tabUrl);
+            setLoading(false);
+            return;
+          }
+
           setCurrentDomain(parsed.hostname);
 
           chrome.runtime.sendMessage(
             { type: 'ANALYZE_ACTIVE_TAB', tabId: tab.id },
             (response) => {
-              if (response && response.analysis) {
+              if (chrome.runtime.lastError) {
+                // If service worker is waking up or failed, compute dynamic edge analysis
+                setAnalysis(generateDynamicFallbackAnalysis(parsed.hostname));
+                setEvalMode('edge');
+              } else if (response && response.analysis) {
                 setAnalysis(response.analysis);
-                setEvalMode(response.analysis.summary.includes('Edge evaluation') ? 'edge' : 'backend');
+                setEvalMode(response.analysis.summary?.includes('Edge evaluation') ? 'edge' : 'backend');
               } else {
                 setAnalysis(generateDynamicFallbackAnalysis(parsed.hostname));
                 setEvalMode('edge');
@@ -58,12 +86,21 @@ export const App: React.FC = () => {
             }
           );
           return;
+        } else {
+          // Extension running in browser, but active tab has restricted context
+          setIsSystemPage(true);
+          setSystemPageUrl('Browser Internal / New Tab Page');
+          setCurrentDomain('Browser System Page');
+          setLoading(false);
+          return;
         }
       }
     } catch {
-      // Standalone browser test mode
+      // Standalone browser dev environment
     }
 
+    // Only fallback to demo example.com in non-extension standalone dev mode
+    setCurrentDomain('example.com');
     setAnalysis(generateDynamicFallbackAnalysis('example.com'));
     setLoading(false);
   };

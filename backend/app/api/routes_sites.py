@@ -10,6 +10,7 @@ from app.ai.gemini_provider import GeminiAIProvider
 from app.ai.mock_provider import MockAIProvider
 from app.core.correlation_engine import CorrelationEngine
 from app.core.risk_engine import RiskEngine
+from app.core.temporal_diff import TemporalDiffEngine
 from app.schemas.policy import PolicyClaimSchema
 from app.schemas.observation import NetworkSignalSchema, StorageSignalSchema
 from app.schemas.correlation import (
@@ -87,25 +88,50 @@ async def correlate_site(request: CorrelateRequest):
             for r in obs_rows
         ]
 
-        # 3. Detect Privacy Gaps
+        # 3. Fetch storage and cookie observations
+        cursor = await db.execute(
+            """SELECT * FROM storage_observations WHERE site_id = ? ORDER BY timestamp DESC LIMIT 50""",
+            (site_id,)
+        )
+        storage_rows = await cursor.fetchall()
+        storage_keys: List[StorageSignalSchema] = [
+            StorageSignalSchema(
+                type=r["type"],
+                name=r["name"],
+                isThirdParty=bool(r["is_third_party"]),
+                persistent=bool(r["persistent"]),
+                byteLength=r["byte_length"]
+            )
+            for r in storage_rows
+        ]
+
+        # 4. Fetch permission observations
+        cursor = await db.execute(
+            """SELECT DISTINCT permission FROM permission_observations WHERE site_id = ?""",
+            (site_id,)
+        )
+        perm_rows = await cursor.fetchall()
+        permissions: List[str] = [r["permission"] for r in perm_rows]
+
+        # 5. Detect Privacy Gaps (Correlating Declared Claims vs. Network + Storage + Permissions)
         findings = await correlation_engine.detect_privacy_gaps(
             domain=domain,
             claims=claims,
             requests=requests,
-            storage_keys=[],
-            permissions=[]
+            storage_keys=storage_keys,
+            permissions=permissions
         )
 
-        # 4. Compute Deterministic Risk & Confidence
+        # 6. Compute Deterministic Risk & Confidence
         risk_score, risk_tier, confidence = RiskEngine.compute_risk_and_confidence(
             claims=claims,
             requests=requests,
-            storage_keys=[],
+            storage_keys=storage_keys,
             findings=findings,
             policy_found=len(claims) > 0
         )
 
-        # 5. Persist Findings & Risk Snapshot
+        # 7. Persist Findings & Risk Snapshot
         for f in findings:
             await db.execute(
                 """INSERT OR REPLACE INTO findings (
@@ -122,7 +148,7 @@ async def correlate_site(request: CorrelateRequest):
         )
         await db.commit()
 
-        # 6. Build Data Flow Graph
+        # 8. Build Data Flow Graph
         tp_domains = {}
         for req in requests:
             if req.isThirdParty:
@@ -148,7 +174,7 @@ async def correlate_site(request: CorrelateRequest):
             for d, meta in tp_domains.items()
         ]
 
-        # 7. Check Temporal History (Snapshot Diff)
+        # 9. Temporal Diff Check
         cursor = await db.execute(
             "SELECT score FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC LIMIT 2",
             (site_id,)
@@ -169,7 +195,7 @@ async def correlate_site(request: CorrelateRequest):
         riskScore=risk_score,
         riskTier=risk_tier,
         confidence=confidence,
-        summary=f"Automated evaluation completed with {len(findings)} detected gap candidates across {len(requests)} observable signals.",
+        summary=f"Automated evaluation completed with {len(findings)} detected gap candidates across {len(requests)} observable signals, {len(storage_keys)} storage keys, and {len(permissions)} permissions.",
         claimsCount=len(claims),
         observedThirdPartiesCount=len(third_parties_nodes),
         findings=findings,
@@ -183,20 +209,78 @@ async def correlate_site(request: CorrelateRequest):
 @router.get("/sites/{domain}/diff")
 async def get_site_temporal_diff(domain: str):
     """
-    Returns temporal risk score evolution and policy changes for the domain.
+    Comprehensive temporal comparison: Calculates semantic policy diffs,
+    new/removed third-party emitters, and risk posture drift over time.
     """
     site_id = f"site_{hashlib.md5(domain.encode()).hexdigest()[:8]}"
     async with aiosqlite.connect(settings.sqlite_db_path) as db:
         db.row_factory = aiosqlite.Row
+
+        # Fetch historical snapshots
         cursor = await db.execute(
             "SELECT score, tier, confidence, timestamp FROM risk_snapshots WHERE site_id = ? ORDER BY timestamp DESC LIMIT 10",
             (site_id,)
         )
-        rows = await cursor.fetchall()
-        if not rows:
-            raise HTTPException(status_code=404, detail="No historical records for site")
+        snapshots = await cursor.fetchall()
+        if not snapshots:
+            raise HTTPException(status_code=404, detail="No historical records found for site")
+
+        # Fetch policies (previous and current)
+        cursor = await db.execute(
+            "SELECT id FROM policies WHERE site_id = ? ORDER BY retrieved_at DESC LIMIT 2",
+            (site_id,)
+        )
+        policy_ids = [r["id"] for r in await cursor.fetchall()]
+
+        curr_claims: List[PolicyClaimSchema] = []
+        prev_claims: List[PolicyClaimSchema] = []
+
+        if len(policy_ids) >= 1:
+            c_cursor = await db.execute("SELECT * FROM policy_claims WHERE policy_id = ?", (policy_ids[0],))
+            curr_claims = [
+                PolicyClaimSchema(
+                    claim_id=r["id"], category=r["category"], data_type=r["data_type"], purpose=r["purpose"],
+                    sharing=bool(r["sharing"]), third_party=r["third_party"], retention_specified=bool(r["retention_specified"]),
+                    retention_period=r["retention_period"], section_name=r["section_name"], exact_quote=r["exact_quote"],
+                    confidence=r["confidence"]
+                ) for r in await c_cursor.fetchall()
+            ]
+
+        if len(policy_ids) >= 2:
+            c_cursor = await db.execute("SELECT * FROM policy_claims WHERE policy_id = ?", (policy_ids[1],))
+            prev_claims = [
+                PolicyClaimSchema(
+                    claim_id=r["id"], category=r["category"], data_type=r["data_type"], purpose=r["purpose"],
+                    sharing=bool(r["sharing"]), third_party=r["third_party"], retention_specified=bool(r["retention_specified"]),
+                    retention_period=r["retention_period"], section_name=r["section_name"], exact_quote=r["exact_quote"],
+                    confidence=r["confidence"]
+                ) for r in await c_cursor.fetchall()
+            ]
+
+        # Fetch recent requests
+        cursor = await db.execute("SELECT * FROM observations WHERE site_id = ? ORDER BY timestamp DESC LIMIT 60", (site_id,))
+        requests = [
+            NetworkSignalSchema(
+                url=r["target_domain"], targetDomain=r["target_domain"], isThirdParty=bool(r["is_third_party"]),
+                category=r["category"]
+            ) for r in await cursor.fetchall()
+        ]
+
+        prev_score = snapshots[1]["score"] if len(snapshots) > 1 else None
+        curr_score = snapshots[0]["score"]
+
+        comparison = TemporalDiffEngine.compare_snapshots(
+            domain=domain,
+            prev_score=prev_score,
+            curr_score=curr_score,
+            prev_claims=prev_claims,
+            curr_claims=curr_claims,
+            prev_requests=[],
+            curr_requests=requests
+        )
 
         return {
             "domain": domain,
-            "snapshots": [dict(r) for r in rows]
+            "comparison": comparison.model_dump(),
+            "snapshots": [dict(r) for r in snapshots]
         }
