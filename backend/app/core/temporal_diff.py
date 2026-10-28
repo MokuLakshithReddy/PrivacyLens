@@ -144,3 +144,4 @@ class TemporalDiffEngine:
             telemetry_delta=telemetry_delta,
             summary=" ".join(summary_parts)
         )
+

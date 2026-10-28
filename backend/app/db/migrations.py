@@ -218,3 +218,4 @@ async def rollback_migration(target_version: int):
                     await db.executescript(down_sql)
                     await db.execute("DELETE FROM schema_migrations WHERE version = ?", (v,))
                     await db.commit()
+

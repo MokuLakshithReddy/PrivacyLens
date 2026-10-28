@@ -75,3 +75,4 @@ async def test_database_migrations_and_recovery():
     finally:
         if os.path.exists(backup_file):
             os.remove(backup_file)
+

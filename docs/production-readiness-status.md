@@ -94,3 +94,4 @@ In Manifest V3 (MV3), Chromium puts background service workers into an `(Inactiv
 
 ### 5.2 Resilient Active Tab Discovery
 The extension popup query logic queries both `currentWindow: true` and `lastFocusedWindow: true` to prevent empty results across Edge split views, DevTools windows, and browser start tabs (`edge://newtab`, `about:blank`, `ntp.msn.com`). System pages are cleanly caught and presented with user guidance.
+
