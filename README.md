@@ -6,31 +6,38 @@ See [Production Readiness Status](docs/production-readiness-status.md) for the r
 
 ## At a glance
 
-![GitHub stars](https://img.shields.io/github/stars/MokuLakshithReddy/PrivacyLens?style=flat-square&label=stars)
-![GitHub forks](https://img.shields.io/github/forks/MokuLakshithReddy/PrivacyLens?style=flat-square&label=forks)
-![Open issues](https://img.shields.io/github/issues/MokuLakshithReddy/PrivacyLens?style=flat-square&label=open%20issues)
-![Last commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/PrivacyLens?style=flat-square)
+[![GitHub stars](https://img.shields.io/github/stars/MokuLakshithReddy/PrivacyLens?style=flat-square&label=stars)](https://github.com/MokuLakshithReddy/PrivacyLens/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/MokuLakshithReddy/PrivacyLens?style=flat-square&label=forks)](https://github.com/MokuLakshithReddy/PrivacyLens/network/members)
+[![Open issues](https://img.shields.io/github/issues/MokuLakshithReddy/PrivacyLens?style=flat-square&label=open%20issues)](https://github.com/MokuLakshithReddy/PrivacyLens/issues)
+[![Last commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/PrivacyLens?style=flat-square)](https://github.com/MokuLakshithReddy/PrivacyLens/commits/main)
 
 **Why it matters:** Privacy notices describe intended data practices, while browser activity reveals observable network destinations. PrivacyLens gives a user a local, inspectable way to compare those two views—without presenting heuristic findings as proof of wrongdoing or legal non-compliance.
 
-## System flow
+## Visual workflow: local-first privacy evidence
 
 ```mermaid
 flowchart TD
-    A["Browser activity"] --> B["Manifest V3 extension"]
-    B -->|"Bounded request metadata<br/>monitoring is opt-in"| C["Local FastAPI service"]
-    C --> D[("SQLite scan store")]
-    E["User chooses policy fetch"] -->|"Separate consent"| F["Bounded policy fetcher"]
-    F --> G["Policy text and extracted claims"]
-    D --> H["Scan-scoped comparison"]
-    G --> H
-    H --> I["Evidence excerpts and heuristic gap candidates"]
-    I --> J["User reviews findings"]
+    A["Browser activity"] --> B["Opt-in extension observes limited request metadata"]
+    B --> C["Local FastAPI service on loopback"]
+    C --> D{"User separately allows policy fetch?"}
+    D -->|Yes| E["Bounded policy retrieval and extraction"]
+    D -->|No| F["Use available local evidence only"]
+    E --> G["Correlate observations with policy excerpts"]
+    F --> G
+    G --> H["Show heuristic findings with source context"]
+    H --> I["User reviews or deletes stored site data"]
 ```
 
-The extension's monitoring and policy-fetch controls are separate. The risk indicator and disclosure-gap candidates are heuristic signals, not a calibrated risk score.
+### Verification snapshot
 
-**Evidence status:** The repository documents backend and extension privacy-invariant tests. No independently validated accuracy or performance benchmark is published yet; this README does not claim one.
+| Area | Recorded verification |
+|---|---:|
+| Backend tests | **28 passed** |
+| Extension privacy-invariant tests | **7 passed** |
+| Chromium browser E2E tests | **2** |
+| CI evidence | [Run 40003937749](https://github.com/MokuLakshithReddy/PrivacyLens/actions/runs/40003937749) |
+
+**Important scope:** PrivacyLens remains a **local research prototype**. Risk factors and evidence coverage are heuristic estimates, not calibrated probabilities, a site-safety verdict, or a legal-compliance determination. Hosted mode is intentionally blocked pending authentication, authorization, quotas, and further release review. See [production-readiness status](docs/production-readiness-status.md) and [privacy/data handling](PRIVACY.md).
 
 ---
 ## Current capabilities
