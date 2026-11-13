@@ -1,5 +1,8 @@
 # PrivacyLens
 
+[![Stars](https://img.shields.io/github/stars/MokuLakshithReddy/PrivacyLens?style=flat-square)](https://github.com/MokuLakshithReddy/PrivacyLens/stargazers) [![Forks](https://img.shields.io/github/forks/MokuLakshithReddy/PrivacyLens?style=flat-square)](https://github.com/MokuLakshithReddy/PrivacyLens/forks) [![Open Issues](https://img.shields.io/github/issues/MokuLakshithReddy/PrivacyLens?style=flat-square)](https://github.com/MokuLakshithReddy/PrivacyLens/issues) [![Last Commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/PrivacyLens?style=flat-square)](https://github.com/MokuLakshithReddy/PrivacyLens/commits/main)
+
+
 PrivacyLens is a local research prototype for observing browser network metadata and comparing it with extracted privacy-policy claims. The extension monitoring toggle defaults to off. Its categories, risk indicator, and disclosure-gap candidates are heuristic; they do not establish what data was transmitted, whether a site is safe, or legal compliance.
 
 See [Production Readiness Status](docs/production-readiness-status.md) for the repository analysis, completed work, verification, and release gates. See [Privacy and Data Handling](PRIVACY.md) for what the extension and local API collect, store, and send.
