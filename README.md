@@ -4,6 +4,35 @@ PrivacyLens is a local research prototype for observing browser network metadata
 
 See [Production Readiness Status](docs/production-readiness-status.md) for the repository analysis, completed work, verification, and release gates. See [Privacy and Data Handling](PRIVACY.md) for what the extension and local API collect, store, and send.
 
+## At a glance
+
+![GitHub stars](https://img.shields.io/github/stars/MokuLakshithReddy/PrivacyLens?style=flat-square&label=stars)
+![GitHub forks](https://img.shields.io/github/forks/MokuLakshithReddy/PrivacyLens?style=flat-square&label=forks)
+![Open issues](https://img.shields.io/github/issues/MokuLakshithReddy/PrivacyLens?style=flat-square&label=open%20issues)
+![Last commit](https://img.shields.io/github/last-commit/MokuLakshithReddy/PrivacyLens?style=flat-square)
+
+**Why it matters:** Privacy notices describe intended data practices, while browser activity reveals observable network destinations. PrivacyLens gives a user a local, inspectable way to compare those two views—without presenting heuristic findings as proof of wrongdoing or legal non-compliance.
+
+## System flow
+
+```mermaid
+flowchart TD
+    A["Browser activity"] --> B["Manifest V3 extension"]
+    B -->|"Bounded request metadata<br/>monitoring is opt-in"| C["Local FastAPI service"]
+    C --> D[("SQLite scan store")]
+    E["User chooses policy fetch"] -->|"Separate consent"| F["Bounded policy fetcher"]
+    F --> G["Policy text and extracted claims"]
+    D --> H["Scan-scoped comparison"]
+    G --> H
+    H --> I["Evidence excerpts and heuristic gap candidates"]
+    I --> J["User reviews findings"]
+```
+
+The extension's monitoring and policy-fetch controls are separate. The risk indicator and disclosure-gap candidates are heuristic signals, not a calibrated risk score.
+
+**Evidence status:** The repository documents backend and extension privacy-invariant tests. No independently validated accuracy or performance benchmark is published yet; this README does not claim one.
+
+---
 ## Current capabilities
 
 - Manifest V3 extension observes request destination origins, initiator hostnames, methods, categories, and timestamps while monitoring is enabled.
