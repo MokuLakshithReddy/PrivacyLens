@@ -4,6 +4,36 @@ PrivacyLens is a local research prototype for observing browser network metadata
 
 See [Production Readiness Status](docs/production-readiness-status.md) for the repository analysis, completed work, verification, and release gates. See [Privacy and Data Handling](PRIVACY.md) for what the extension and local API collect, store, and send.
 
+## Visual workflow: local-first privacy evidence
+
+```mermaid
+flowchart TD
+    A["Browser activity"] --> B["Opt-in extension observes limited request metadata"]
+    B --> C["Local FastAPI service on loopback"]
+    C --> D{"User separately allows policy fetch?"}
+    D -->|Yes| E["Bounded policy retrieval and extraction"]
+    D -->|No| F["Use available local evidence only"]
+    E --> G["Correlate observations with policy excerpts"]
+    F --> G
+    G --> H["Show heuristic findings with source context"]
+    H --> I["User reviews or deletes stored site data"]
+```
+
+### Verification snapshot
+
+| Area | Recorded verification |
+|---|---:|
+| Backend tests | **28 passed** |
+| Extension privacy-invariant tests | **7 passed** |
+| Chromium browser E2E tests | **2** |
+| CI evidence | [Run 40003937749](https://github.com/MokuLakshithReddy/PrivacyLens/actions/runs/40003937749) |
+
+**Important scope:** PrivacyLens remains a **local research prototype**. Risk factors and evidence coverage are heuristic estimates, not calibrated probabilities, a site-safety verdict, or a legal-compliance determination. Hosted mode is intentionally blocked pending authentication, authorization, quotas, and further release review. See [production-readiness status](docs/production-readiness-status.md) and [privacy/data handling](PRIVACY.md).
+
+**Why it matters:** lets a user inspect limited browser-network metadata alongside policy evidence without silently treating heuristic correlation as proof of wrongdoing.
+
+---
+
 ## Current capabilities
 
 - Manifest V3 extension observes request destination origins, initiator hostnames, methods, categories, and timestamps while monitoring is enabled.
